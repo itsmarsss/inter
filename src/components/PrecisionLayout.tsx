@@ -66,6 +66,8 @@ type PrecisionLayoutProps = {
   marble: MarbleResult;
   onGenerateRoom: () => void;
   onCancelRun: () => void;
+  /** When true, all chrome animates in from its respective edge. */
+  entering?: boolean;
 };
 
 export function PrecisionLayout({
@@ -101,12 +103,21 @@ export function PrecisionLayout({
   marble,
   onGenerateRoom,
   onCancelRun,
+  entering = false,
 }: PrecisionLayoutProps) {
   const [activeSection, setActiveSection] = useState<RailSection>("objects");
   const [panelOpen, setPanelOpen] = useState(true);
   const [blueprintDialogOpen, setBlueprintDialogOpen] = useState(false);
 
   const splatAvailable = marble.status === "complete" && Boolean(marble.spzUrl);
+
+  // Build an animation shorthand for the entrance animations. Each wrapper
+  // div uses `position: absolute; inset: 0` (a full-screen positioned box),
+  // so children that already use absolute positioning land in the same spot
+  // they would without the wrapper.
+  const ease = "cubic-bezier(0.22, 1, 0.36, 1)";
+  const anim = (name: string, delay: number) =>
+    entering ? `${name} 0.55s ${ease} ${delay}ms both` : undefined;
 
   function handleSectionChange(section: RailSection) {
     if (section === activeSection && panelOpen) {
@@ -136,70 +147,99 @@ export function PrecisionLayout({
       {/* Layer 0 — full-screen 3D viewport */}
       <Viewport room={room}>{viewport}</Viewport>
 
-      {/* Layer 1 — icon rail (always visible) */}
-      <IconRail
-        activeSection={activeSection}
-        panelOpen={panelOpen}
-        onSectionChange={handleSectionChange}
-      />
+      {/* Layer 1 — icon rail (slides from left) */}
+      <div style={{ position: "absolute", inset: 0, pointerEvents: "none", animation: anim("ui-from-left", 0) }}>
+        <div style={{ pointerEvents: "auto" }}>
+          <IconRail
+            activeSection={activeSection}
+            panelOpen={panelOpen}
+            onSectionChange={handleSectionChange}
+          />
+        </div>
+      </div>
 
-      {/* Layer 1 — left panels (always mounted, width-animated) */}
-      <ObjectsPanel
-        open={panelOpen && activeSection === "objects"}
-        tool={tool}
-        onToolChange={onToolChange}
-        selected={selected}
-        onSelect={onSelect}
-        doors={doors}
-        windows={windows}
-        wallSegments={wallSegments}
-        shapes={customShapes}
-        cameras={cameras}
-        activeShapeKind={activeShapeKind}
-        onActiveShapeKindChange={onActiveShapeKindChange}
-        onAddDoor={onAddDoor}
-        onAddWindow={onAddWindow}
-        onRemoveDoor={onRemoveDoor}
-        onRemoveWindow={onRemoveWindow}
-        onRemoveWallSegment={onRemoveWallSegment}
-        onResetWallSegments={onResetWallSegments}
-        onClose={() => setPanelOpen(false)}
-      />
+      {/* Layer 1 — left panels (slide from left, slightly delayed) */}
+      <div style={{ position: "absolute", inset: 0, pointerEvents: "none", animation: anim("ui-from-left", 80) }}>
+        <div style={{ pointerEvents: "auto" }}>
+          <ObjectsPanel
+            open={panelOpen && activeSection === "objects"}
+            tool={tool}
+            onToolChange={onToolChange}
+            selected={selected}
+            onSelect={onSelect}
+            doors={doors}
+            windows={windows}
+            wallSegments={wallSegments}
+            shapes={customShapes}
+            cameras={cameras}
+            activeShapeKind={activeShapeKind}
+            onActiveShapeKindChange={onActiveShapeKindChange}
+            onAddDoor={onAddDoor}
+            onAddWindow={onAddWindow}
+            onRemoveDoor={onRemoveDoor}
+            onRemoveWindow={onRemoveWindow}
+            onRemoveWallSegment={onRemoveWallSegment}
+            onResetWallSegments={onResetWallSegments}
+            onClose={() => setPanelOpen(false)}
+          />
+        </div>
+      </div>
 
-      <FurniturePanel
-        open={panelOpen && activeSection === "furniture"}
-        assets={furnitureAssets}
-        onGenerate={onGenerateFurniture}
-        onUploadModel={onUploadModel}
-        onClose={() => setPanelOpen(false)}
-      />
+      <div style={{ position: "absolute", inset: 0, pointerEvents: "none", animation: anim("ui-from-left", 80) }}>
+        <div style={{ pointerEvents: "auto" }}>
+          <FurniturePanel
+            open={panelOpen && activeSection === "furniture"}
+            assets={furnitureAssets}
+            onGenerate={onGenerateFurniture}
+            onUploadModel={onUploadModel}
+            onClose={() => setPanelOpen(false)}
+          />
+        </div>
+      </div>
 
-      <WorldPanel
-        open={panelOpen && activeSection === "world"}
-        prompt={stylePrompt}
-        marble={marble}
-        onPromptChange={onStylePromptChange}
-        onGenerate={onGenerateRoom}
-        onCancelRun={onCancelRun}
-        onClose={() => setPanelOpen(false)}
-      />
+      <div style={{ position: "absolute", inset: 0, pointerEvents: "none", animation: anim("ui-from-left", 80) }}>
+        <div style={{ pointerEvents: "auto" }}>
+          <WorldPanel
+            open={panelOpen && activeSection === "world"}
+            prompt={stylePrompt}
+            marble={marble}
+            onPromptChange={onStylePromptChange}
+            onGenerate={onGenerateRoom}
+            onCancelRun={onCancelRun}
+            onClose={() => setPanelOpen(false)}
+          />
+        </div>
+      </div>
 
       {/* Layer 2 — floating chrome (never covers viewport center) */}
-      <ModeBar
-        activeMode={viewMode}
-        onModeChange={onViewModeChange}
-        splatAvailable={splatAvailable}
-      />
-      <MinimapPanel
-        room={room}
-        blueprint={blueprintPreview}
-        onExpand={() => setBlueprintDialogOpen(true)}
-      />
+      <div style={{ position: "absolute", inset: 0, pointerEvents: "none", animation: anim("ui-from-top", 40) }}>
+        <div style={{ pointerEvents: "auto" }}>
+          <ModeBar
+            activeMode={viewMode}
+            onModeChange={onViewModeChange}
+            splatAvailable={splatAvailable}
+          />
+        </div>
+      </div>
 
-      <BottomToolbar
-        worldActive={activeSection === "world" && panelOpen}
-        onOpenWorld={openWorld}
-      />
+      <div style={{ position: "absolute", inset: 0, pointerEvents: "none", animation: anim("ui-from-right", 80) }}>
+        <div style={{ pointerEvents: "auto" }}>
+          <MinimapPanel
+            room={room}
+            blueprint={blueprintPreview}
+            onExpand={() => setBlueprintDialogOpen(true)}
+          />
+        </div>
+      </div>
+
+      <div style={{ position: "absolute", inset: 0, pointerEvents: "none", animation: anim("ui-from-bottom", 100) }}>
+        <div style={{ pointerEvents: "auto" }}>
+          <BottomToolbar
+            worldActive={activeSection === "world" && panelOpen}
+            onOpenWorld={openWorld}
+          />
+        </div>
+      </div>
 
       {/* Upload error toast */}
       {upload.status === "failed" && (

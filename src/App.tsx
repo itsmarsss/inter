@@ -23,7 +23,7 @@ import {
 } from "./state/editor";
 import type { CaptureImage, EditorState } from "./state/types";
 
-export default function App() {
+export default function App({ entering = false }: { entering?: boolean }) {
   const [state, setState] = useState<EditorState>(() => ({ ...initialState }));
   const [viewMode, setViewMode] = useState<ViewMode>("Block");
   const sceneCaptureRef = useRef<() => CaptureImage | undefined>(() => undefined);
@@ -403,6 +403,7 @@ export default function App() {
       marble={state.marble}
       onGenerateRoom={handleGenerateFinalRoom}
       onCancelRun={handleCancelRun}
+      entering={entering}
     />
   );
 }
