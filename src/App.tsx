@@ -331,14 +331,12 @@ export default function App() {
             marble={state.marble}
             workflowStep={state.workflowStep}
             visibility={state.visibility}
-            panoramaOpacity={state.panoramaOpacity}
             onPromptChange={(stylePrompt) => setState((current) => ({ ...current, stylePrompt }))}
             onGenerate={handleGenerateFinalRoom}
             onCancelRun={handleCancelRun}
             onLoadExample={loadExampleSplat}
             onWorkflowStepChange={(workflowStep) => setState((current) => ({ ...current, workflowStep }))}
             onVisibilityChange={(visibility) => setState((current) => ({ ...current, visibility }))}
-            onPanoramaOpacityChange={(panoramaOpacity) => setState((current) => ({ ...current, panoramaOpacity }))}
           />
         }
       />

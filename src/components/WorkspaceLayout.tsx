@@ -98,16 +98,25 @@ function dockedIconStyle(dock: DockedWindowIcon) {
   return { left: dock.offset, bottom: "0.75rem", transform: "translateX(-50%)" };
 }
 
+function clampPanelPosition(x: number, y: number, width: number, height: number) {
+  const margin = 12;
+  const viewportWidth = typeof window === "undefined" ? 1280 : window.innerWidth;
+  const viewportHeight = typeof window === "undefined" ? 800 : window.innerHeight;
+  const maxX = Math.max(margin, viewportWidth - width - margin);
+  const maxY = Math.max(margin, viewportHeight - height - margin);
+
+  return {
+    x: Math.min(maxX, Math.max(margin, x)),
+    y: Math.min(maxY, Math.max(margin, y)),
+  };
+}
+
 export function WorkspaceLayout({
   upload,
-  marble,
   tool,
-  prompt,
   panoramaOpacity,
   onUploadModel,
   onToolChange,
-  onGenerate,
-  onCancelRun,
   onPanoramaOpacityChange,
   onLoadExample,
   activeShapeKind,
@@ -126,6 +135,8 @@ export function WorkspaceLayout({
   const [blueprintPanelPosition, setBlueprintPanelPosition] = useState<{ x: number; y: number } | null>(null);
   const [blueprintPanelSize, setBlueprintPanelSize] = useState({ width: 328, height: 176 });
   const [blueprintMinimized, setBlueprintMinimized] = useState<DockedWindowIcon | null>(null);
+  const [aiPanelPosition, setAiPanelPosition] = useState<{ x: number; y: number } | null>(null);
+  const [aiMinimized, setAiMinimized] = useState<DockedWindowIcon | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const geometryDragRef = useRef<{
     pointerId: number;
@@ -148,7 +159,13 @@ export function WorkspaceLayout({
     startWidth: number;
     startHeight: number;
   } | null>(null);
-  const busy = marble.status === "uploading" || marble.status === "generating";
+  const aiDragRef = useRef<{
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    startX: number;
+    startY: number;
+  } | null>(null);
 
   function handleToolChange(nextTool: ToolMode) {
     onToolChange(nextTool);
@@ -172,6 +189,8 @@ export function WorkspaceLayout({
     const dragHandle = event.currentTarget;
     const panel = dragHandle.closest<HTMLElement>("[data-geometry-panel]");
     const panelRect = panel?.getBoundingClientRect();
+    const panelWidth = panelRect?.width ?? 296;
+    const panelHeight = panelRect?.height ?? 384;
     geometryDragRef.current = {
       pointerId,
       startClientX: event.clientX,
@@ -185,10 +204,14 @@ export function WorkspaceLayout({
       const session = geometryDragRef.current;
       if (!session || session.pointerId !== moveEvent.pointerId) return;
 
-      setGeometryPanelPosition({
-        x: session.startX + moveEvent.clientX - session.startClientX,
-        y: session.startY + moveEvent.clientY - session.startClientY,
-      });
+      setGeometryPanelPosition(
+        clampPanelPosition(
+          session.startX + moveEvent.clientX - session.startClientX,
+          session.startY + moveEvent.clientY - session.startClientY,
+          panelWidth,
+          panelHeight,
+        ),
+      );
     }
 
     function endDrag(endEvent: PointerEvent) {
@@ -220,6 +243,8 @@ export function WorkspaceLayout({
     const dragHandle = event.currentTarget;
     const panel = dragHandle.closest<HTMLElement>("[data-blueprint-panel]");
     const panelRect = panel?.getBoundingClientRect();
+    const panelWidth = panelRect?.width ?? blueprintPanelSize.width;
+    const panelHeight = panelRect?.height ?? blueprintPanelSize.height;
     blueprintDragRef.current = {
       pointerId,
       startClientX: event.clientX,
@@ -233,10 +258,14 @@ export function WorkspaceLayout({
       const session = blueprintDragRef.current;
       if (!session || session.pointerId !== moveEvent.pointerId) return;
 
-      setBlueprintPanelPosition({
-        x: session.startX + moveEvent.clientX - session.startClientX,
-        y: session.startY + moveEvent.clientY - session.startClientY,
-      });
+      setBlueprintPanelPosition(
+        clampPanelPosition(
+          session.startX + moveEvent.clientX - session.startClientX,
+          session.startY + moveEvent.clientY - session.startClientY,
+          panelWidth,
+          panelHeight,
+        ),
+      );
     }
 
     function endDrag(endEvent: PointerEvent) {
@@ -305,6 +334,60 @@ export function WorkspaceLayout({
     window.addEventListener("pointermove", handlePointerMove, { capture: true });
     window.addEventListener("pointerup", endResize, { capture: true });
     window.addEventListener("pointercancel", endResize, { capture: true });
+  }
+
+  function beginAIPanelDrag(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0 || !event.isPrimary) return;
+
+    event.preventDefault();
+    const pointerId = event.pointerId;
+    const dragHandle = event.currentTarget;
+    const panel = dragHandle.closest<HTMLElement>("[data-ai-panel]");
+    const panelRect = panel?.getBoundingClientRect();
+    const panelWidth = panelRect?.width ?? 448;
+    const panelHeight = panelRect?.height ?? 480;
+    aiDragRef.current = {
+      pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startX: aiPanelPosition?.x ?? panelRect?.left ?? window.innerWidth / 2 - 224,
+      startY: aiPanelPosition?.y ?? panelRect?.top ?? window.innerHeight - 520,
+    };
+    dragHandle.setPointerCapture(pointerId);
+
+    function handlePointerMove(moveEvent: PointerEvent) {
+      const session = aiDragRef.current;
+      if (!session || session.pointerId !== moveEvent.pointerId) return;
+
+      setAiPanelPosition(
+        clampPanelPosition(
+          session.startX + moveEvent.clientX - session.startClientX,
+          session.startY + moveEvent.clientY - session.startClientY,
+          panelWidth,
+          panelHeight,
+        ),
+      );
+    }
+
+    function endDrag(endEvent: PointerEvent) {
+      const session = aiDragRef.current;
+      if (!session || session.pointerId !== endEvent.pointerId) return;
+      aiDragRef.current = null;
+
+      try {
+        dragHandle.releasePointerCapture(pointerId);
+      } catch {
+        // Pointer capture can already be released by the browser.
+      }
+
+      window.removeEventListener("pointermove", handlePointerMove, { capture: true });
+      window.removeEventListener("pointerup", endDrag, { capture: true });
+      window.removeEventListener("pointercancel", endDrag, { capture: true });
+    }
+
+    window.addEventListener("pointermove", handlePointerMove, { capture: true });
+    window.addEventListener("pointerup", endDrag, { capture: true });
+    window.addEventListener("pointercancel", endDrag, { capture: true });
   }
 
   return (
@@ -435,33 +518,48 @@ export function WorkspaceLayout({
           </div>
         )}
 
-        <div className="pointer-events-auto absolute bottom-[calc(env(safe-area-inset-bottom)+0.75rem)] left-1/2 w-[min(36rem,calc(100vw-1.5rem))] -translate-x-1/2 lg:hidden">
-          <FloatingSurface>
-            <WidgetHeader icon={WandSparkles} title="Generate result" />
-            {ai}
-          </FloatingSurface>
-        </div>
-
-        <div className="pointer-events-auto absolute bottom-[calc(env(safe-area-inset-bottom)+0.75rem)] left-1/2 hidden -translate-x-1/2 items-center gap-2 sm:flex">
-          <button
-            type="button"
-            onClick={onGenerate}
-            disabled={busy || !prompt.trim()}
-            className="flex h-9 items-center gap-2 rounded-md bg-[var(--color-accent-clay)] px-3 text-xs font-semibold text-[var(--color-background)] shadow-[var(--shadow-panel)] hover:bg-[var(--color-accent-hover)] disabled:cursor-not-allowed disabled:bg-[var(--color-inset)] disabled:text-[var(--color-text-muted)]"
+        {aiMinimized ? (
+          <DockedWindowButton
+            icon={WandSparkles}
+            label="Restore Generate result"
+            dock={aiMinimized}
+            onClick={() => setAiMinimized(null)}
+          />
+        ) : (
+          <div
+            data-ai-panel
+            className="pointer-events-auto absolute flex w-[min(32rem,calc(100vw-1.5rem))] max-h-[calc(100dvh-1.5rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] flex-col"
+            style={
+              aiPanelPosition
+                ? { left: aiPanelPosition.x, top: aiPanelPosition.y }
+                : {
+                    left: "50%",
+                    bottom: "calc(env(safe-area-inset-bottom) + 0.75rem)",
+                    transform: "translateX(-50%)",
+                  }
+            }
           >
-            <Sparkles className="size-4" />
-            Generate
-          </button>
-          <button
-            type="button"
-            onClick={onCancelRun}
-            disabled={!busy}
-            className="flex h-9 items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-overlay)] px-3 text-xs font-semibold text-[var(--color-text-primary)] shadow-[var(--shadow-panel)] hover:bg-[var(--color-inset)] disabled:cursor-not-allowed disabled:text-[var(--color-text-muted)]"
-          >
-            <X className="size-4" />
-            Cancel
-          </button>
-        </div>
+            <FloatingSurface className="max-h-[calc(100dvh-3rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))]">
+              <WidgetHeader
+                icon={WandSparkles}
+                title="Generate result"
+                draggable
+                onPointerDown={beginAIPanelDrag}
+                action={
+                  <div onPointerDown={(event) => event.stopPropagation()}>
+                    <IconButton
+                      label="Minimize Generate result"
+                      onClick={() => minimizeFloatingPanel("[data-ai-panel]", setAiMinimized)}
+                    >
+                      <Minus className="size-4" />
+                    </IconButton>
+                  </div>
+                }
+              />
+              <div className="thin-scrollbar min-h-0 flex-1 overflow-auto">{ai}</div>
+            </FloatingSurface>
+          </div>
+        )}
 
         <div className="pointer-events-auto absolute bottom-[calc(env(safe-area-inset-bottom)+0.75rem)] right-3 hidden items-center gap-2 sm:flex">
           <button

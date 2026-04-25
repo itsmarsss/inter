@@ -12,6 +12,7 @@ import {
   createSceneCamera,
   resizeRoomFromWall,
   roomDimensions,
+  setRoomDimensionFromWall,
   wallPosition,
   wallSize,
 } from "../state/editor";
@@ -106,9 +107,39 @@ type ObjectDragSession = {
   previousControlsEnabled: boolean;
 };
 
+type ShapeResizeAxis = 0 | 1 | 2;
+
+type ShapeResizeSession = {
+  shapeId: string;
+  pointerId: number;
+  axis: ShapeResizeAxis;
+  sign: -1 | 1;
+  startScale: Vec3;
+  startLocalValue: number;
+  startClientY: number;
+  latestClientX: number;
+  latestClientY: number;
+  rafId: number | null;
+  previousControlsEnabled: boolean;
+};
+
+type ShapeRotateSession = {
+  shapeId: string;
+  pointerId: number;
+  startRotation: Vec3;
+  startAngle: number;
+  latestClientX: number;
+  latestClientY: number;
+  rafId: number | null;
+  previousControlsEnabled: boolean;
+};
+
 const SCENE_COLORS = {
   background: "#080B10",
   floor: "#111821",
+  axisX: "#E2564A",
+  axisY: "#65B96F",
+  axisZ: "#4C8DFF",
   wall: "#B8C2CC",
   wallEdge: "#E5EDF5",
   wallSelected: "#3BA7FF",
@@ -127,7 +158,6 @@ const SCENE_COLORS = {
 } as const;
 
 const EDITING_MOUSE_BUTTONS: OrbitControlsImpl["mouseButtons"] = {
-  LEFT: THREE.MOUSE.ROTATE,
   MIDDLE: THREE.MOUSE.ROTATE,
   RIGHT: THREE.MOUSE.PAN,
 };
@@ -312,14 +342,6 @@ export function SceneView(props: SceneViewProps) {
     if (nextMode === "splat") setComparisonValue(100);
   }
 
-  function updateComparisonValue(value: number) {
-    const nextValue = THREE.MathUtils.clamp(value, 0, 100);
-    setComparisonValue(nextValue);
-    setComparisonMode(nextValue <= 0 ? "blockout" : nextValue >= 100 ? "splat" : "blend");
-    setComparisonSpzUrl(props.marble.spzUrl);
-    if (nextValue <= 0) setFirstPersonActive(false);
-  }
-
   function enterFirstPerson() {
     if (!generatedAvailable) return;
     setComparisonMode("splat");
@@ -353,7 +375,7 @@ export function SceneView(props: SceneViewProps) {
   return (
     <div
       className="relative h-full min-h-0 bg-[var(--color-background)]"
-      title="Viewport navigation: middle mouse or Alt-drag orbits, right mouse pans, wheel zooms."
+      title="Viewport navigation: two-finger swipe, middle mouse, or Alt-drag orbits; right mouse pans."
       onDragOver={(event) => event.preventDefault()}
       onDrop={handleDrop}
     >
@@ -407,22 +429,6 @@ export function SceneView(props: SceneViewProps) {
               );
             })}
           </div>
-          {generatedAvailable ? (
-            <label className="grid min-w-[11rem] flex-1 grid-cols-[auto_minmax(6rem,1fr)_2.25rem] items-center gap-2">
-              <span className="font-medium text-[var(--color-text-primary)]">Mix</span>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                step={1}
-                value={activeComparisonValue}
-                aria-label="Blockout to splat comparison"
-                className="h-2 min-w-0 accent-[var(--color-accent)]"
-                onChange={(event) => updateComparisonValue(Number(event.target.value))}
-              />
-              <span className="text-right tabular-nums text-[var(--color-text-primary)]">{activeComparisonValue}%</span>
-            </label>
-          ) : null}
           {generatedAvailable ? (
             <button
               type="button"
@@ -546,6 +552,8 @@ function SceneContent({
   const onCamerasChangeRef = useRef(onCamerasChange);
   const wallDragRef = useRef<WallDragSession | null>(null);
   const objectDragRef = useRef<ObjectDragSession | null>(null);
+  const shapeResizeRef = useRef<ShapeResizeSession | null>(null);
+  const shapeRotateRef = useRef<ShapeRotateSession | null>(null);
   const pointerScratchRef = useRef({
     pointer: new THREE.Vector2(),
     raycaster: new THREE.Raycaster(),
@@ -599,7 +607,7 @@ function SceneContent({
         controls.enabled = false;
         return;
       }
-      controls.mouseButtons = viewMode === "generated" || enabled ? ALT_ORBIT_MOUSE_BUTTONS : EDITING_MOUSE_BUTTONS;
+      controls.mouseButtons = enabled ? ALT_ORBIT_MOUSE_BUTTONS : EDITING_MOUSE_BUTTONS;
     }
 
     function handlePointerDown(event: PointerEvent) {
@@ -628,6 +636,37 @@ function SceneContent({
       window.removeEventListener("blur", resetMouseButtons);
     };
   }, [firstPersonActive, gl.domElement, viewMode]);
+
+  useEffect(() => {
+    const element = gl.domElement;
+
+    function handleTrackpadWheel(event: WheelEvent) {
+      const controls = orbitControlsRef.current;
+      if (firstPersonActive || !controls?.enabled || event.ctrlKey) return;
+      if (shapeResizeRef.current || shapeRotateRef.current || objectDragRef.current || wallDragRef.current) return;
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+
+      const target = controls.target;
+      const offset = new THREE.Vector3().subVectors(camera.position, target);
+      const spherical = new THREE.Spherical().setFromVector3(offset);
+      const rotateSpeed = 0.0032;
+      spherical.theta += event.deltaX * rotateSpeed;
+      spherical.phi += event.deltaY * rotateSpeed;
+      spherical.phi = THREE.MathUtils.clamp(spherical.phi, 0.08, Math.PI / 2.05);
+      spherical.makeSafe();
+
+      camera.position.copy(target).add(new THREE.Vector3().setFromSpherical(spherical));
+      camera.lookAt(target);
+      controls.update();
+    }
+
+    element.addEventListener("wheel", handleTrackpadWheel, { capture: true, passive: false });
+    return () => {
+      element.removeEventListener("wheel", handleTrackpadWheel, { capture: true });
+    };
+  }, [camera, firstPersonActive, gl.domElement, viewMode]);
 
   const projectPointerToFloor = useCallback(
     (clientX: number, clientY: number): Vec3 | null => {
@@ -861,12 +900,184 @@ function SceneContent({
     };
   }, [gl.domElement, projectPointerToFloor]);
 
+  useEffect(() => {
+    const element = gl.domElement;
+
+    function applyShapeResize() {
+      const session = shapeResizeRef.current;
+      if (!session) return;
+
+      session.rafId = null;
+      const shape = shapesRef.current.find((item) => item.id === session.shapeId);
+      if (!shape) return;
+
+      let nextAxisScale = session.startScale[session.axis];
+      if (session.axis === 1) {
+        nextAxisScale = session.startScale[1] + session.sign * (session.startClientY - session.latestClientY) * 0.025;
+      } else {
+        const nextLocalValue = shapeLocalPointerValue(
+          shape,
+          session.axis,
+          session.latestClientX,
+          session.latestClientY,
+          projectPointerToFloor,
+        );
+        if (nextLocalValue === null) return;
+        nextAxisScale = session.startScale[session.axis] + session.sign * 2 * (nextLocalValue - session.startLocalValue);
+      }
+
+      const nextScale: Vec3 = [...session.startScale];
+      nextScale[session.axis] = Math.max(0.05, Math.abs(nextAxisScale));
+      onShapesChangeRef.current(
+        shapesRef.current.map((item) => (item.id === session.shapeId ? { ...item, scale: nextScale } : item)),
+      );
+    }
+
+    function scheduleShapeResizeUpdate() {
+      const session = shapeResizeRef.current;
+      if (!session || session.rafId !== null) return;
+      session.rafId = window.requestAnimationFrame(applyShapeResize);
+    }
+
+    function endShapeResize(pointerId?: number) {
+      const session = shapeResizeRef.current;
+      if (!session || (pointerId !== undefined && session.pointerId !== pointerId)) return;
+
+      if (session.rafId !== null) {
+        window.cancelAnimationFrame(session.rafId);
+      }
+
+      try {
+        if (element.hasPointerCapture(session.pointerId)) {
+          element.releasePointerCapture(session.pointerId);
+        }
+      } catch {
+        // Pointer capture can already be gone after browser-level cancellation.
+      }
+
+      const controls = orbitControlsRef.current;
+      if (controls) {
+        controls.enabled = session.previousControlsEnabled;
+      }
+
+      shapeResizeRef.current = null;
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      const session = shapeResizeRef.current;
+      if (!session || session.pointerId !== event.pointerId) return;
+
+      session.latestClientX = event.clientX;
+      session.latestClientY = event.clientY;
+      scheduleShapeResizeUpdate();
+    }
+
+    function handlePointerUp(event: PointerEvent) {
+      endShapeResize(event.pointerId);
+    }
+
+    function handleBlur() {
+      endShapeResize();
+    }
+
+    window.addEventListener("pointermove", handlePointerMove, { capture: true });
+    window.addEventListener("pointerup", handlePointerUp, { capture: true });
+    window.addEventListener("pointercancel", handlePointerUp, { capture: true });
+    window.addEventListener("blur", handleBlur);
+
+    return () => {
+      endShapeResize();
+      window.removeEventListener("pointermove", handlePointerMove, { capture: true });
+      window.removeEventListener("pointerup", handlePointerUp, { capture: true });
+      window.removeEventListener("pointercancel", handlePointerUp, { capture: true });
+      window.removeEventListener("blur", handleBlur);
+    };
+  }, [gl.domElement, projectPointerToFloor]);
+
+  useEffect(() => {
+    const element = gl.domElement;
+
+    function applyShapeRotate() {
+      const session = shapeRotateRef.current;
+      if (!session) return;
+
+      session.rafId = null;
+      const shape = shapesRef.current.find((item) => item.id === session.shapeId);
+      if (!shape) return;
+
+      const nextAngle = shapePointerAngle(shape, session.latestClientX, session.latestClientY, projectPointerToFloor);
+      if (nextAngle === null) return;
+
+      const nextRotation: Vec3 = [...session.startRotation];
+      nextRotation[1] = session.startRotation[1] - shortestAngleDelta(nextAngle, session.startAngle);
+      onShapesChangeRef.current(
+        shapesRef.current.map((item) => (item.id === session.shapeId ? { ...item, rotation: nextRotation } : item)),
+      );
+    }
+
+    function scheduleShapeRotateUpdate() {
+      const session = shapeRotateRef.current;
+      if (!session || session.rafId !== null) return;
+      session.rafId = window.requestAnimationFrame(applyShapeRotate);
+    }
+
+    function endShapeRotate(pointerId?: number) {
+      const session = shapeRotateRef.current;
+      if (!session || (pointerId !== undefined && session.pointerId !== pointerId)) return;
+
+      if (session.rafId !== null) {
+        window.cancelAnimationFrame(session.rafId);
+      }
+
+      try {
+        if (element.hasPointerCapture(session.pointerId)) {
+          element.releasePointerCapture(session.pointerId);
+        }
+      } catch {
+        // Pointer capture can already be gone after browser-level cancellation.
+      }
+
+      const controls = orbitControlsRef.current;
+      if (controls) {
+        controls.enabled = session.previousControlsEnabled;
+      }
+
+      shapeRotateRef.current = null;
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      const session = shapeRotateRef.current;
+      if (!session || session.pointerId !== event.pointerId) return;
+
+      session.latestClientX = event.clientX;
+      session.latestClientY = event.clientY;
+      scheduleShapeRotateUpdate();
+    }
+
+    function handlePointerUp(event: PointerEvent) {
+      endShapeRotate(event.pointerId);
+    }
+
+    function handleBlur() {
+      endShapeRotate();
+    }
+
+    window.addEventListener("pointermove", handlePointerMove, { capture: true });
+    window.addEventListener("pointerup", handlePointerUp, { capture: true });
+    window.addEventListener("pointercancel", handlePointerUp, { capture: true });
+    window.addEventListener("blur", handleBlur);
+
+    return () => {
+      endShapeRotate();
+      window.removeEventListener("pointermove", handlePointerMove, { capture: true });
+      window.removeEventListener("pointerup", handlePointerUp, { capture: true });
+      window.removeEventListener("pointercancel", handlePointerUp, { capture: true });
+      window.removeEventListener("blur", handleBlur);
+    };
+  }, [gl.domElement, projectPointerToFloor]);
+
   function updateInstance(next: FurnitureInstance) {
     onInstancesChange(instances.map((instance) => (instance.id === next.id ? next : instance)));
-  }
-
-  function updateShape(next: CustomShape) {
-    onShapesChange(shapes.map((shape) => (shape.id === next.id ? next : shape)));
   }
 
   function updateCamera(next: SceneCamera) {
@@ -980,6 +1191,85 @@ function SceneContent({
     }
   }
 
+  function handleShapeResizePointerDown(
+    shape: CustomShape,
+    axis: ShapeResizeAxis,
+    sign: -1 | 1,
+    event: ThreeEvent<PointerEvent>,
+  ) {
+    if (viewMode !== "blockout") return;
+    if (tool !== "select" && tool !== "move" && tool !== "scale") return;
+    if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
+
+    event.stopPropagation();
+    const startLocalValue = axis === 1 ? 0 : shapeLocalPointerValue(shape, axis, event.clientX, event.clientY, projectPointerToFloor);
+    if (startLocalValue === null) return;
+
+    const controls = orbitControlsRef.current;
+    shapeResizeRef.current = {
+      shapeId: shape.id,
+      pointerId: event.pointerId,
+      axis,
+      sign,
+      startScale: [...shape.scale],
+      startLocalValue,
+      startClientY: event.clientY,
+      latestClientX: event.clientX,
+      latestClientY: event.clientY,
+      rafId: null,
+      previousControlsEnabled: controls?.enabled ?? true,
+    };
+
+    objectDragRef.current = null;
+    if (controls) {
+      controls.enabled = false;
+    }
+
+    try {
+      gl.domElement.setPointerCapture(event.pointerId);
+    } catch {
+      // Some browsers can reject capture if the native pointer sequence has already ended.
+    }
+
+    onSelect({ type: "shape", id: shape.id });
+  }
+
+  function handleShapeRotatePointerDown(shape: CustomShape, event: ThreeEvent<PointerEvent>) {
+    if (viewMode !== "blockout") return;
+    if (tool !== "select" && tool !== "move" && tool !== "rotate") return;
+    if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
+
+    event.stopPropagation();
+    const startAngle = shapePointerAngle(shape, event.clientX, event.clientY, projectPointerToFloor);
+    if (startAngle === null) return;
+
+    const controls = orbitControlsRef.current;
+    shapeRotateRef.current = {
+      shapeId: shape.id,
+      pointerId: event.pointerId,
+      startRotation: [...shape.rotation],
+      startAngle,
+      latestClientX: event.clientX,
+      latestClientY: event.clientY,
+      rafId: null,
+      previousControlsEnabled: controls?.enabled ?? true,
+    };
+
+    objectDragRef.current = null;
+    shapeResizeRef.current = null;
+    if (controls) {
+      controls.enabled = false;
+    }
+
+    try {
+      gl.domElement.setPointerCapture(event.pointerId);
+    } catch {
+      // Some browsers can reject capture if the native pointer sequence has already ended.
+    }
+
+    onSelect({ type: "shape", id: shape.id });
+  }
+
   return (
     <>
       <ViewportCamera />
@@ -994,7 +1284,7 @@ function SceneContent({
         enableDamping
         dampingFactor={0.08}
         maxPolarAngle={Math.PI / 2.05}
-        mouseButtons={viewMode === "generated" ? ALT_ORBIT_MOUSE_BUTTONS : EDITING_MOUSE_BUTTONS}
+        mouseButtons={EDITING_MOUSE_BUTTONS}
         touches={VIEWPORT_TOUCHES}
       />
       <PointerLockControls
@@ -1069,8 +1359,8 @@ function SceneContent({
             opacity={blockoutOpacity}
             onSelect={() => onSelect(viewMode === "blockout" ? { type: "shape", id: shape.id } : null)}
             onDragStart={(event) => handleObjectPointerDown({ type: "shape", id: shape.id }, shape.position, event)}
-            onTransformActiveChange={handleTransformActiveChange}
-            onChange={updateShape}
+            onResizeStart={(axis, sign, event) => handleShapeResizePointerDown(shape, axis, sign, event)}
+            onRotateStart={(event) => handleShapeRotatePointerDown(shape, event)}
           />
         ))}
         {cameras.map((sceneCamera) => (
@@ -1091,9 +1381,7 @@ function SceneContent({
       </group>
       {viewMode === "blockout" ? (
         <Html position={[room.minX, 0.04, room.maxZ + 0.22]} center zIndexRange={[0, 0]}>
-            <span className="rounded border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-overlay)_88%,transparent)] px-2 py-1 text-[11px] text-[var(--color-accent)]">
-            {(room.maxX - room.minX).toFixed(1)}m x {(room.maxZ - room.minZ).toFixed(1)}m
-          </span>
+          <RoomDimensionBadge room={room} onRoomChange={onRoomChange} />
         </Html>
       ) : null}
     </>
@@ -1149,7 +1437,9 @@ function BlockoutReferenceLayer({
         fadeStrength={1.35}
         fadeFrom={0}
       />
+      <WorldAxisGuides room={room} opacity={opacity} />
       <RoomFloor room={room} opacity={opacity} onPointerDown={editable ? onFloorPointerDown : undefined} />
+      <RoomDoorMarker room={room} opacity={opacity} />
       {(["north", "south", "east", "west"] as WallId[]).map((wall) => (
         <WallMesh
           key={wall}
@@ -1167,8 +1457,180 @@ function BlockoutReferenceLayer({
   );
 }
 
+function RoomDimensionBadge({
+  room,
+  onRoomChange,
+}: {
+  room: RoomBounds;
+  onRoomChange: (room: RoomBounds) => void;
+}) {
+  const dimensions = roomDimensions(room);
+
+  function commitWidth(value: string) {
+    const nextWidth = Number(value);
+    if (!Number.isFinite(nextWidth)) {
+      return;
+    }
+    onRoomChange(setRoomDimensionFromWall(room, "east", nextWidth));
+  }
+
+  function commitDepth(value: string) {
+    const nextDepth = Number(value);
+    if (!Number.isFinite(nextDepth)) {
+      return;
+    }
+    onRoomChange(setRoomDimensionFromWall(room, "north", nextDepth));
+  }
+
+  return (
+    <div
+      className="flex whitespace-nowrap rounded border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-overlay)_90%,transparent)] px-1.5 py-1 text-[11px] text-[var(--color-accent)] shadow-[var(--shadow-float)] [backdrop-filter:var(--panel-blur)]"
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <DimensionInput
+        key={`width-${formatDimensionValue(dimensions.width)}`}
+        ariaLabel="Room width"
+        initialValue={formatDimensionValue(dimensions.width)}
+        onCommit={commitWidth}
+      />
+      <span className="px-1 text-[var(--color-text-muted)]">x</span>
+      <DimensionInput
+        key={`depth-${formatDimensionValue(dimensions.depth)}`}
+        ariaLabel="Room depth"
+        initialValue={formatDimensionValue(dimensions.depth)}
+        onCommit={commitDepth}
+      />
+    </div>
+  );
+}
+
+function DimensionInput({
+  ariaLabel,
+  initialValue,
+  onCommit,
+}: {
+  ariaLabel: string;
+  initialValue: string;
+  onCommit: (value: string) => void;
+}) {
+  const [value, setValue] = useState(initialValue);
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter") {
+      event.currentTarget.blur();
+    }
+    if (event.key === "Escape") {
+      setValue(initialValue);
+      event.currentTarget.blur();
+    }
+  }
+
+  return (
+    <label className="flex items-center gap-0.5">
+      <input
+        aria-label={ariaLabel}
+        type="number"
+        step="0.1"
+        value={value}
+        onChange={(event) => {
+          setValue(event.target.value);
+          onCommit(event.target.value);
+        }}
+        onKeyDown={handleKeyDown}
+        className="h-5 w-10 rounded-sm border border-transparent bg-transparent text-right font-semibold tabular-nums text-[var(--color-accent)] outline-none hover:border-[var(--color-border)] focus:border-[var(--color-accent)] focus:bg-[var(--color-inset)]"
+      />
+      <span>m</span>
+    </label>
+  );
+}
+
+function formatDimensionValue(value: number) {
+  return value.toFixed(1);
+}
+
 function fadeSceneColor(color: string, opacity: number) {
   return new THREE.Color(color).lerp(new THREE.Color(SCENE_COLORS.background), 1 - THREE.MathUtils.clamp(opacity, 0, 1));
+}
+
+function shapeLocalPointerValue(
+  shape: CustomShape,
+  axis: ShapeResizeAxis,
+  clientX: number,
+  clientY: number,
+  projectPointerToFloor: Projector,
+) {
+  if (axis === 1) return 0;
+  const point = projectPointerToFloor(clientX, clientY);
+  if (!point) return null;
+
+  const localPoint = new THREE.Vector3(
+    point[0] - shape.position[0],
+    point[1] - shape.position[1],
+    point[2] - shape.position[2],
+  );
+  const inverseRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(...shape.rotation)).invert();
+  localPoint.applyQuaternion(inverseRotation);
+  return axis === 0 ? localPoint.x : localPoint.z;
+}
+
+function shapePointerAngle(shape: CustomShape, clientX: number, clientY: number, projectPointerToFloor: Projector) {
+  const point = projectPointerToFloor(clientX, clientY);
+  if (!point) return null;
+  return Math.atan2(point[2] - shape.position[2], point[0] - shape.position[0]);
+}
+
+function shortestAngleDelta(nextAngle: number, startAngle: number) {
+  return Math.atan2(Math.sin(nextAngle - startAngle), Math.cos(nextAngle - startAngle));
+}
+
+function WorldAxisGuides({ room, opacity }: { room: RoomBounds; opacity: number }) {
+  const axisLength = Math.max(10000, room.maxX - room.minX, room.maxZ - room.minZ);
+  const xStart = -axisLength;
+  const xEnd = axisLength;
+  const zStart = -axisLength;
+  const zEnd = axisLength;
+  const lineOpacity = 0.76 * opacity;
+
+  return (
+    <group userData={{ captureHidden: true }}>
+      <AxisGuideLine start={[xStart, 0.035, 0]} end={[xEnd, 0.035, 0]} color={SCENE_COLORS.axisX} opacity={lineOpacity} />
+      <AxisGuideLine start={[0, 0.035, zStart]} end={[0, 0.035, zEnd]} color={SCENE_COLORS.axisZ} opacity={lineOpacity} />
+      <AxisGuideLine start={[0, -axisLength, 0]} end={[0, axisLength, 0]} color={SCENE_COLORS.axisY} opacity={lineOpacity} />
+    </group>
+  );
+}
+
+function AxisGuideLine({
+  start,
+  end,
+  color,
+  opacity,
+}: {
+  start: Vec3;
+  end: Vec3;
+  color: string;
+  opacity: number;
+}) {
+  const line = useMemo(() => {
+    const nextGeometry = new THREE.BufferGeometry();
+    nextGeometry.setFromPoints([new THREE.Vector3(...start), new THREE.Vector3(...end)]);
+    const material = new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthWrite: false });
+    return new THREE.Line(nextGeometry, material);
+  }, [color, end, opacity, start]);
+
+  useEffect(() => {
+    return () => {
+      line.geometry.dispose();
+      if (Array.isArray(line.material)) {
+        line.material.forEach((material) => material.dispose());
+      } else {
+        line.material.dispose();
+      }
+    };
+  }, [line]);
+
+  return <primitive object={line} />;
 }
 
 function MarbleSplatScene({
@@ -1804,12 +2266,26 @@ function dockedViewportIconStyle(dock: DockedViewportIcon) {
   return { left: dock.offset, bottom: "0.75rem", transform: "translateX(-50%)" };
 }
 
+function clampViewportPanelPosition(x: number, y: number, width: number, height: number) {
+  const margin = 12;
+  const viewportWidth = typeof window === "undefined" ? 1280 : window.innerWidth;
+  const viewportHeight = typeof window === "undefined" ? 800 : window.innerHeight;
+  const maxX = Math.max(margin, viewportWidth - width - margin);
+  const maxY = Math.max(margin, viewportHeight - height - margin);
+
+  return {
+    x: Math.min(maxX, Math.max(margin, x)),
+    y: Math.min(maxY, Math.max(margin, y)),
+  };
+}
+
 function DraggableViewportPanel({
   title,
   icon: Icon,
   restoreLabel,
   className,
   defaultPlacement,
+  minimizedPlacement,
   action,
   children,
 }: {
@@ -1818,6 +2294,7 @@ function DraggableViewportPanel({
   restoreLabel: string;
   className?: string;
   defaultPlacement: React.CSSProperties;
+  minimizedPlacement?: React.CSSProperties;
   action?: ReactNode;
   children: ReactNode;
 }) {
@@ -1839,6 +2316,8 @@ function DraggableViewportPanel({
     const pointerId = event.pointerId;
     const dragHandle = event.currentTarget;
     const panelRect = panelRef.current?.getBoundingClientRect();
+    const panelWidth = panelRect?.width ?? 224;
+    const panelHeight = panelRect?.height ?? 140;
     dragRef.current = {
       pointerId,
       startClientX: event.clientX,
@@ -1852,10 +2331,14 @@ function DraggableViewportPanel({
       const session = dragRef.current;
       if (!session || session.pointerId !== moveEvent.pointerId) return;
 
-      setPanelPosition({
-        x: session.startX + moveEvent.clientX - session.startClientX,
-        y: session.startY + moveEvent.clientY - session.startClientY,
-      });
+      setPanelPosition(
+        clampViewportPanelPosition(
+          session.startX + moveEvent.clientX - session.startClientX,
+          session.startY + moveEvent.clientY - session.startClientY,
+          panelWidth,
+          panelHeight,
+        ),
+      );
     }
 
     function endDrag(endEvent: PointerEvent) {
@@ -1892,7 +2375,7 @@ function DraggableViewportPanel({
         aria-label={restoreLabel}
         title={restoreLabel}
         className="absolute grid size-10 place-items-center rounded-md border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-overlay)_94%,transparent)] text-[var(--color-text-muted)] shadow-[var(--shadow-float)] hover:bg-[var(--color-inset)] hover:text-[var(--color-text-primary)] [backdrop-filter:var(--panel-blur)]"
-        style={dockedViewportIconStyle(minimized)}
+        style={minimizedPlacement ?? dockedViewportIconStyle(minimized)}
         onClick={() => setMinimized(null)}
       >
         <Icon className="size-4" />
@@ -1961,6 +2444,7 @@ function SplatAlignmentControls({
       restoreLabel="Restore Splat Align"
       className="w-56"
       defaultPlacement={{ right: "0.75rem", top: "0.75rem" }}
+      minimizedPlacement={{ left: "calc(50% + 21rem)", top: "0.75rem" }}
       action={
         <button
           type="button"
@@ -2082,6 +2566,46 @@ function RoomFloor({
         depthWrite={opacity >= 0.98}
       />
     </mesh>
+  );
+}
+
+function RoomDoorMarker({ room, opacity }: { room: RoomBounds; opacity: number }) {
+  const doorWidth = Math.min(0.9, Math.max(0.65, (room.maxX - room.minX) * 0.16));
+  const doorHeight = Math.min(2.05, Math.max(1.75, room.height * 0.74));
+  const doorCenterX = Math.min(room.maxX - doorWidth / 2 - 0.25, room.minX + 1);
+  const z = room.minZ - 0.055;
+  const frameColor = fadeSceneColor(SCENE_COLORS.darkWood, opacity);
+  const panelColor = fadeSceneColor("#1B2530", opacity);
+
+  return (
+    <group userData={{ captureHidden: true }}>
+      <mesh position={[doorCenterX, doorHeight / 2, z]}>
+        <boxGeometry args={[doorWidth, doorHeight, 0.035]} />
+        <meshStandardMaterial
+          color={panelColor}
+          transparent
+          opacity={0.38 * opacity}
+          roughness={0.7}
+          depthWrite={false}
+        />
+      </mesh>
+      <mesh position={[doorCenterX - doorWidth / 2, doorHeight / 2, z - 0.01]}>
+        <boxGeometry args={[0.055, doorHeight, 0.07]} />
+        <meshStandardMaterial color={frameColor} transparent opacity={0.82 * opacity} depthWrite={false} />
+      </mesh>
+      <mesh position={[doorCenterX + doorWidth / 2, doorHeight / 2, z - 0.01]}>
+        <boxGeometry args={[0.055, doorHeight, 0.07]} />
+        <meshStandardMaterial color={frameColor} transparent opacity={0.82 * opacity} depthWrite={false} />
+      </mesh>
+      <mesh position={[doorCenterX, doorHeight, z - 0.01]}>
+        <boxGeometry args={[doorWidth + 0.11, 0.055, 0.07]} />
+        <meshStandardMaterial color={frameColor} transparent opacity={0.82 * opacity} depthWrite={false} />
+      </mesh>
+      <mesh position={[doorCenterX + doorWidth * 0.32, doorHeight * 0.5, z - 0.045]}>
+        <sphereGeometry args={[0.045, 16, 10]} />
+        <meshStandardMaterial color={SCENE_COLORS.warmLight} transparent opacity={0.9 * opacity} depthWrite={false} />
+      </mesh>
+    </group>
   );
 }
 
@@ -2275,8 +2799,8 @@ type ShapeNodeProps = {
   opacity: number;
   onSelect: () => void;
   onDragStart: (event: ThreeEvent<PointerEvent>) => void;
-  onTransformActiveChange: (active: boolean) => void;
-  onChange: (shape: CustomShape) => void;
+  onResizeStart: (axis: ShapeResizeAxis, sign: -1 | 1, event: ThreeEvent<PointerEvent>) => void;
+  onRotateStart: (event: ThreeEvent<PointerEvent>) => void;
 };
 
 function ShapeNode({
@@ -2288,11 +2812,12 @@ function ShapeNode({
   opacity,
   onSelect,
   onDragStart,
-  onTransformActiveChange,
-  onChange,
+  onResizeStart,
+  onRotateStart,
 }: ShapeNodeProps) {
   const groupRef = useRef<THREE.Group>(null);
-  const transformMode = tool === "rotate" ? "rotate" : tool === "scale" ? "scale" : "translate";
+  const showResizeHandles = selected && (tool === "select" || tool === "move" || tool === "scale");
+  const showRotateHandle = selected && (tool === "select" || tool === "move" || tool === "rotate");
 
   useFrame(() => {
     if (!groupRef.current || !selected) return;
@@ -2307,17 +2832,6 @@ function ShapeNode({
     }
   });
 
-  function pushTransform() {
-    const object = groupRef.current;
-    if (!object) return;
-    onChange({
-      ...shape,
-      position: [object.position.x, object.position.y, object.position.z],
-      rotation: [object.rotation.x, object.rotation.y, object.rotation.z],
-      scale: [object.scale.x, object.scale.y, object.scale.z],
-    });
-  }
-
   const content = (
     <group
       ref={groupRef}
@@ -2331,26 +2845,12 @@ function ShapeNode({
       }}
     >
       <ShapePrimitive shape={shape} selected={selected} hovered={hovered} opacity={opacity} />
+      {showResizeHandles ? <ShapeResizeHandles shape={shape} opacity={opacity} onResizeStart={onResizeStart} /> : null}
+      {showRotateHandle ? <ShapeRotateHandle shape={shape} opacity={opacity} onRotateStart={onRotateStart} /> : null}
     </group>
   );
 
-  if (!selected || tool === "select" || tool === "add-wall" || tool === "add-furniture" || tool === "add-shape") {
-    return content;
-  }
-
-  return (
-    <TransformControls
-      mode={transformMode}
-      onMouseDown={() => onTransformActiveChange(true)}
-      onObjectChange={pushTransform}
-      onMouseUp={() => {
-        pushTransform();
-        onTransformActiveChange(false);
-      }}
-    >
-      {content}
-    </TransformControls>
-  );
+  return content;
 }
 
 type SceneCameraNodeProps = {
@@ -2435,6 +2935,86 @@ function SceneCameraNode({
     >
       {content}
     </TransformControls>
+  );
+}
+
+function ShapeResizeHandles({
+  shape,
+  opacity,
+  onResizeStart,
+}: {
+  shape: CustomShape;
+  opacity: number;
+  onResizeStart: (axis: ShapeResizeAxis, sign: -1 | 1, event: ThreeEvent<PointerEvent>) => void;
+}) {
+  const safeScale = shape.scale.map((value) => Math.max(0.05, Math.abs(value))) as Vec3;
+  const inverseScale: Vec3 = [1 / safeScale[0], 1 / safeScale[1], 1 / safeScale[2]];
+  const handleSize: Vec3 = [0.16, 0.16, 0.16];
+  const handles: Array<{ axis: ShapeResizeAxis; sign: -1 | 1; position: Vec3; color: string }> = [
+    { axis: 0, sign: -1, position: [-0.62, 0, 0], color: SCENE_COLORS.axisX },
+    { axis: 0, sign: 1, position: [0.62, 0, 0], color: SCENE_COLORS.axisX },
+    { axis: 1, sign: -1, position: [0, -0.62, 0], color: SCENE_COLORS.axisY },
+    { axis: 1, sign: 1, position: [0, 0.62, 0], color: SCENE_COLORS.axisY },
+    { axis: 2, sign: -1, position: [0, 0, -0.62], color: SCENE_COLORS.axisZ },
+    { axis: 2, sign: 1, position: [0, 0, 0.62], color: SCENE_COLORS.axisZ },
+  ];
+
+  return (
+    <group userData={{ captureHidden: true }}>
+      {handles.map((handle) => (
+        <mesh
+          key={`${handle.axis}-${handle.sign}`}
+          position={handle.position}
+          scale={inverseScale}
+          onPointerDown={(event) => onResizeStart(handle.axis, handle.sign, event)}
+        >
+          <boxGeometry args={handleSize} />
+          <meshStandardMaterial
+            color={handle.color}
+            emissive={handle.color}
+            emissiveIntensity={0.22}
+            roughness={0.42}
+            transparent
+            opacity={0.95 * opacity}
+            depthWrite={opacity >= 0.98}
+          />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+function ShapeRotateHandle({
+  shape,
+  opacity,
+  onRotateStart,
+}: {
+  shape: CustomShape;
+  opacity: number;
+  onRotateStart: (event: ThreeEvent<PointerEvent>) => void;
+}) {
+  const safeScale = shape.scale.map((value) => Math.max(0.05, Math.abs(value))) as Vec3;
+  const inverseScale: Vec3 = [1 / safeScale[0], 1 / safeScale[1], 1 / safeScale[2]];
+
+  return (
+    <group userData={{ captureHidden: true }}>
+      <mesh position={[0, 0.72, 0]} rotation={[Math.PI / 2, 0, 0]} onPointerDown={onRotateStart}>
+        <torusGeometry args={[0.78, 0.012, 8, 72]} />
+        <meshBasicMaterial color={SCENE_COLORS.warmLight} transparent opacity={0.72 * opacity} depthWrite={false} />
+      </mesh>
+      <mesh position={[0.86, 0.72, 0]} scale={inverseScale} onPointerDown={onRotateStart}>
+        <sphereGeometry args={[0.085, 18, 12]} />
+        <meshStandardMaterial
+          color={SCENE_COLORS.warmLight}
+          emissive={SCENE_COLORS.warmLight}
+          emissiveIntensity={0.24}
+          roughness={0.38}
+          transparent
+          opacity={0.96 * opacity}
+          depthWrite={opacity >= 0.98}
+        />
+      </mesh>
+    </group>
   );
 }
 
