@@ -18,7 +18,6 @@ import type {
 import {
   buildFloorPolygon,
   clampToFloor,
-  clampToRoom,
   clampWallOffset,
   findSegmentAtFraction,
   offsetToFraction,

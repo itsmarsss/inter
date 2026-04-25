@@ -138,12 +138,11 @@ export function clampToRoom(position: Vec3, room: RoomBounds, margin = 0.35): Ve
 }
 
 /**
- * Clamps a position to the actual segmented floor boundary.
- * Unlike clampToRoom (rectangular), this respects per-segment displacements:
- * pushed-out segments allow movement beyond the original room bounds in that
- * specific region, while pushed-in segments tighten the boundary locally.
- *
- * Two iterations resolve corner cases where x and z constraints interact.
+ * Clamps a position to the actual segmented floor boundary using polygon
+ * projection. Builds an inset floor polygon (adding margin to each segment
+ * displacement), checks point-in-polygon, and if outside projects to the
+ * nearest edge. This avoids the discontinuities caused by per-axis clamping
+ * at segment boundaries.
  */
 export function clampToFloor(
   position: Vec3,
@@ -153,26 +152,55 @@ export function clampToFloor(
 ): Vec3 {
   if (!wallSegments) return clampToRoom(position, room, margin);
 
-  const width = room.maxX - room.minX;
-  const depth = room.maxZ - room.minZ;
-  let x = position[0];
-  let z = position[2];
+  // Build an inset version of the floor polygon by shrinking each wall inward
+  // by the margin (adding margin to displacement moves the wall inward for
+  // all four walls, since positive displacement = inward for all of them).
+  const inset: WallSegmentation = {
+    north: wallSegments.north.map((s) => ({ ...s, displacement: s.displacement + margin })),
+    east:  wallSegments.east.map((s)  => ({ ...s, displacement: s.displacement + margin })),
+    south: wallSegments.south.map((s) => ({ ...s, displacement: s.displacement + margin })),
+    west:  wallSegments.west.map((s)  => ({ ...s, displacement: s.displacement + margin })),
+  };
+  const polygon = buildFloorPolygon(room, inset);
+  if (polygon.length < 3) return clampToRoom(position, room, margin);
 
-  for (let iter = 0; iter < 2; iter++) {
-    const xFrac = width > 0 ? Math.min(1, Math.max(0, (x - room.minX) / width)) : 0.5;
-    const northSeg = findSegmentAtFraction(wallSegments.north, xFrac);
-    const southSeg = findSegmentAtFraction(wallSegments.south, xFrac);
-    z = Math.min(room.maxZ - northSeg.displacement - margin, z);
-    z = Math.max(room.minZ + southSeg.displacement + margin, z);
+  const px = position[0];
+  const pz = position[2];
 
-    const zFrac = depth > 0 ? Math.min(1, Math.max(0, (z - room.minZ) / depth)) : 0.5;
-    const eastSeg = findSegmentAtFraction(wallSegments.east, zFrac);
-    const westSeg = findSegmentAtFraction(wallSegments.west, zFrac);
-    x = Math.min(room.maxX - eastSeg.displacement - margin, x);
-    x = Math.max(room.minX + westSeg.displacement + margin, x);
+  // Ray-cast point-in-polygon test.
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].x, zi = polygon[i].z;
+    const xj = polygon[j].x, zj = polygon[j].z;
+    if ((zi > pz) !== (zj > pz) && px < ((xj - xi) * (pz - zi)) / (zj - zi) + xi) {
+      inside = !inside;
+    }
+  }
+  if (inside) return position;
+
+  // Project onto the nearest polygon edge.
+  let bestDist = Infinity;
+  let bestX = px;
+  let bestZ = pz;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const ax = polygon[j].x, az = polygon[j].z;
+    const bx = polygon[i].x, bz = polygon[i].z;
+    const abx = bx - ax, abz = bz - az;
+    const len2 = abx * abx + abz * abz;
+    if (len2 < 1e-10) continue;
+    const t = Math.max(0, Math.min(1, ((px - ax) * abx + (pz - az) * abz) / len2));
+    const nx = ax + t * abx;
+    const nz = az + t * abz;
+    const dx = nx - px, dz = nz - pz;
+    const dist = dx * dx + dz * dz;
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestX = nx;
+      bestZ = nz;
+    }
   }
 
-  return [x, position[1], z];
+  return [bestX, position[1], bestZ];
 }
 
 export function moveWall(room: RoomBounds, wall: WallId, value: number): RoomBounds {
