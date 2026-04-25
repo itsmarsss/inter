@@ -1,10 +1,10 @@
 import { SplatEdit, SplatEditRgbaBlendMode, SplatEditSdf, SplatEditSdfType, SplatMesh } from "@sparkjsdev/spark";
 import { Canvas, type ThreeEvent, useFrame, useThree } from "@react-three/fiber";
-import { Grid, Html, OrbitControls, PerspectiveCamera, PointerLockControls, TransformControls, useGLTF } from "@react-three/drei";
-import { Camera, Footprints, Minus, SlidersHorizontal } from "lucide-react";
-import { Component, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Grid, Html, OrbitControls, PerspectiveCamera, TransformControls, useGLTF } from "@react-three/drei";
+import { Camera, Minus, SlidersHorizontal } from "lucide-react";
+import { Component, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as THREE from "three";
-import type { OrbitControls as OrbitControlsImpl, PointerLockControls as PointerLockControlsImpl } from "three-stdlib";
+import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import {
   buildFloorPolygon,
   clampToRoom,
@@ -84,6 +84,13 @@ type SplatAlignment = {
   position: Vec3;
   rotationY: number;
   scale: number;
+  /**
+   * Marble-produced SPZs are Y-down so we apply a 180° flip around X to bring
+   * them into Three's Y-up convention. Pre-baked splats from other tools are
+   * often already Y-up — set to `false` for those. Defaults to `true` to
+   * preserve historical behavior.
+   */
+  flipX?: boolean;
 };
 type SplatObjectRegion = {
   sourceRef: Exclude<NonNullable<SelectedRef>, { type: "wall" | "camera" }>;
@@ -253,16 +260,35 @@ const VIEWPORT_TOUCHES: OrbitControlsImpl["touches"] = {
 
 const FLOOR_PLANE = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const SPARK_SPLAT_BASE_QUATERNION = new THREE.Quaternion(1, 0, 0, 0);
+const SPLAT_IDENTITY_QUATERNION = new THREE.Quaternion();
 const DEFAULT_SPLAT_ALIGNMENT: SplatAlignment = {
   position: [0, 0, 0],
   rotationY: 0,
   scale: 1,
+  flipX: true,
+};
+/** URL → starting alignment overrides for pre-baked splats we ship locally. */
+const LOCAL_SPLAT_DEFAULTS: Record<string, SplatAlignment> = {
+  "/splats/sleek-icelandic-bedroom.spz": {
+    position: [0, 0, 0],
+    rotationY: 0,
+    scale: 3,
+    flipX: false,
+  },
 };
 const INITIAL_CAMERA_POSITION: Vec3 = [6.5, 5.2, 7];
 const WALK_SPEED = 2.4;
 const WALK_FAST_MULTIPLIER = 1.8;
-const WALK_WALL_MARGIN = 0.3;
 const WALK_EYE_HEIGHT = 1.6;
+/**
+ * Half-extent of the box (centered at the origin) the splat first-person
+ * camera is allowed to roam. The local pre-baked splat is roughly bedroom-
+ * sized at scale 3, so ±2.5m gives enough wiggle without letting the walker
+ * drift outside the scan.
+ */
+const SPLAT_WALK_HALF_EXTENT = 2.5;
+const SPLAT_LOOK_SENSITIVITY = 0.0035;
+const SPLAT_PITCH_LIMIT = THREE.MathUtils.degToRad(70);
 const LAYOUT_PANO_WIDTH = 2048;
 const LAYOUT_PANO_FALLBACK_WIDTH = 1536;
 const LAYOUT_PANO_MAX_DATA_URL_BYTES = 30 * 1024 * 1024;
@@ -361,14 +387,12 @@ function selectedRefMatches(left: NonNullable<SelectedRef>, right: SelectedRef) 
 
 export function SceneView(props: SceneViewProps) {
   const projectorRef = useRef<Projector | null>(null);
-  const firstPersonLockRef = useRef<() => void>(() => undefined);
   const [objectSplatMode, setObjectSplatMode] = useState<ObjectSplatMode>("off");
   const [splatLoadState, setSplatLoadState] = useState<SplatLoadState>({ status: "idle" });
   const [splatAlignmentState, setSplatAlignmentState] = useState<{
     spzUrl?: string;
     value: SplatAlignment;
   }>(() => ({ spzUrl: props.marble.spzUrl, value: splatAlignmentFromMarble(props.marble) }));
-  const [firstPersonActive, setFirstPersonActive] = useState(false);
   const generatedAvailable = props.marble.status === "complete" && Boolean(props.marble.spzUrl);
   const defaultSplatAlignment = splatAlignmentFromMarble(props.marble);
   const splatAlignment =
@@ -383,7 +407,10 @@ export function SceneView(props: SceneViewProps) {
   const activeViewMode: ViewMode = wantsSplat ? "generated" : "blockout";
   const blockoutOpacity = wantsSplat ? 0 : 1;
   const splatOpacity = wantsSplat ? 1 : 0;
-  const firstPersonEnabled = firstPersonActive && wantsSplat && splatLoadState.status !== "error";
+  // Splat view is *always* first-person. Once the splat is on screen and ready
+  // we hand the camera over to drag-to-look + WASD; orbit goes back on the
+  // moment we leave splat view.
+  const firstPersonActive = wantsSplat && splatLoadState.status === "ready";
 
   const selectedCamera =
     props.selected?.type === "camera" ? props.cameras.find((camera) => camera.id === props.selected?.id) : undefined;
@@ -395,20 +422,6 @@ export function SceneView(props: SceneViewProps) {
     ? splatObjectRegions.find((region) => selectedRefMatches(region.sourceRef, props.selected))
     : undefined;
   const objectSplatControlsVisible = generatedAvailable && splatOpacity > 0 && Boolean(selectedSplatRegion);
-
-  function enterFirstPerson() {
-    if (!wantsSplat) return;
-    setFirstPersonActive(true);
-    firstPersonLockRef.current();
-  }
-
-  function exitFirstPerson() {
-    setFirstPersonActive(false);
-  }
-
-  const registerFirstPersonLock = useCallback((lock: () => void) => {
-    firstPersonLockRef.current = lock;
-  }, []);
 
   function handleDrop(event: React.DragEvent<HTMLDivElement>) {
     event.preventDefault();
@@ -447,68 +460,48 @@ export function SceneView(props: SceneViewProps) {
           objectSplatMode={objectSplatControlsVisible ? objectSplatMode : "off"}
           blockoutOpacity={blockoutOpacity}
           splatOpacity={splatOpacity}
-          firstPersonActive={firstPersonEnabled}
+          firstPersonActive={firstPersonActive}
           onSplatLoadStateChange={setSplatLoadState}
-          onFirstPersonActiveChange={setFirstPersonActive}
-          registerFirstPersonLock={registerFirstPersonLock}
           setProjector={(projector) => (projectorRef.current = projector)}
         />
       </Canvas>
       <ToolHintBanner tool={props.tool} />
-      {wantsSplat ? (
+      {wantsSplat && objectSplatControlsVisible ? (
         <div className="absolute right-3 bottom-12 flex flex-col gap-1 rounded-md border border-[var(--border-mid)] bg-[#16181d] px-2 py-1 text-xs shadow-[0_8px_24px_rgba(0,0,0,0.45)]">
-          <button
-            type="button"
-            aria-pressed={firstPersonEnabled}
-            aria-label={firstPersonEnabled ? "Exit first-person view" : "Enter first-person view"}
-            title={firstPersonEnabled ? "Exit first-person view" : "Enter first-person view"}
-            className={`flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-sm border border-[var(--border-dim)] px-2 font-medium ${
-              firstPersonEnabled
-                ? "bg-[var(--accent-dim)] text-[var(--accent-text)]"
-                : "bg-[var(--surface-input)] text-[var(--text-primary)] hover:bg-[var(--surface-overlay)]"
-            }`}
-            onClick={firstPersonEnabled ? exitFirstPerson : enterFirstPerson}
-          >
-            <Footprints className="size-3.5" />
-            <span>{firstPersonEnabled ? "Exit" : "Walk"}</span>
-          </button>
-          {objectSplatControlsVisible ? (
-            <div className="flex min-w-0 items-center gap-2 border-t border-[var(--border-dim)] pt-1">
-              <span className="shrink-0 font-medium text-[var(--text-bright)]">Object</span>
-              <span className="max-w-[7rem] truncate text-[var(--text-secondary)]">{selectedSplatRegion?.label}</span>
-              <div className="flex min-w-0 flex-1 rounded-sm border border-[var(--border-dim)] bg-[var(--surface-input)] p-0.5">
-                {OBJECT_SPLAT_MODES.map((mode) => (
-                  <button
-                    key={mode.value}
-                    type="button"
-                    aria-pressed={objectSplatMode === mode.value}
-                    className={cn(
-                      "min-w-0 flex-1 rounded-sm px-1.5 py-0.5 font-medium",
-                      objectSplatMode === mode.value
-                        ? "bg-[var(--accent-dim)] text-[var(--accent-text)]"
-                        : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
-                    )}
-                    onClick={() => setObjectSplatMode(mode.value)}
-                  >
-                    <span className="block truncate">{mode.label}</span>
-                  </button>
-                ))}
-              </div>
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="shrink-0 font-medium text-[var(--text-bright)]">Object</span>
+            <span className="max-w-[7rem] truncate text-[var(--text-secondary)]">{selectedSplatRegion?.label}</span>
+            <div className="flex min-w-0 flex-1 rounded-sm border border-[var(--border-dim)] bg-[var(--surface-input)] p-0.5">
+              {OBJECT_SPLAT_MODES.map((mode) => (
+                <button
+                  key={mode.value}
+                  type="button"
+                  aria-pressed={objectSplatMode === mode.value}
+                  className={cn(
+                    "min-w-0 flex-1 rounded-sm px-1.5 py-0.5 font-medium",
+                    objectSplatMode === mode.value
+                      ? "bg-[var(--accent-dim)] text-[var(--accent-text)]"
+                      : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
+                  )}
+                  onClick={() => setObjectSplatMode(mode.value)}
+                >
+                  <span className="block truncate">{mode.label}</span>
+                </button>
+              ))}
             </div>
-          ) : null}
+          </div>
         </div>
       ) : null}
+      {wantsSplat && splatLoadState.status === "ready" ? <SplatWalkHint /> : null}
       {splatOpacity > 0 && splatLoadState.status !== "ready" ? (
         <SplatViewportOverlay marble={props.marble} loadState={splatLoadState} />
       ) : null}
       {splatOpacity > 0 ? (
-        firstPersonEnabled ? null : (
-          <SplatAlignmentControls
-            alignment={splatAlignment}
-            defaultAlignment={defaultSplatAlignment}
-            onAlignmentChange={setSplatAlignment}
-          />
-        )
+        <SplatAlignmentControls
+          alignment={splatAlignment}
+          defaultAlignment={defaultSplatAlignment}
+          onAlignmentChange={setSplatAlignment}
+        />
       ) : null}
       {generatedAvailable && selectedCamera && props.marble.spzUrl ? (
         <SelectedCameraPreviewPanel
@@ -555,8 +548,6 @@ function SceneContent({
   splatOpacity,
   firstPersonActive,
   onSplatLoadStateChange,
-  onFirstPersonActiveChange,
-  registerFirstPersonLock,
   setProjector,
 }: SceneViewProps & {
   viewMode: ViewMode;
@@ -568,12 +559,9 @@ function SceneContent({
   splatOpacity: number;
   firstPersonActive: boolean;
   onSplatLoadStateChange: (state: SplatLoadState) => void;
-  onFirstPersonActiveChange: (active: boolean) => void;
-  registerFirstPersonLock: (lock: () => void) => void;
   setProjector: (projector: Projector) => void;
 }) {
   const orbitControlsRef = useRef<OrbitControlsImpl>(null);
-  const pointerLockControlsRef = useRef<PointerLockControlsImpl>(null);
   const roomRef = useRef(room);
   const instancesRef = useRef(instances);
   const shapesRef = useRef(shapes);
@@ -788,18 +776,6 @@ function SceneContent({
     setProjector(projectPointerToFloor);
   }, [projectPointerToFloor, setProjector]);
 
-  useEffect(() => {
-    registerFirstPersonLock(() => {
-      const controls = pointerLockControlsRef.current;
-      if (!controls) return;
-      controls.connect(gl.domElement);
-      controls.lock();
-    });
-
-    return () => {
-      registerFirstPersonLock(() => undefined);
-    };
-  }, [gl.domElement, registerFirstPersonLock]);
 
   useEffect(() => {
     const element = gl.domElement;
@@ -1722,22 +1698,7 @@ function SceneContent({
         mouseButtons={EDITING_MOUSE_BUTTONS}
         touches={VIEWPORT_TOUCHES}
       />
-      <PointerLockControls
-        ref={pointerLockControlsRef}
-        domElement={gl.domElement}
-        enabled={firstPersonActive}
-        makeDefault={firstPersonActive}
-        pointerSpeed={0.82}
-        minPolarAngle={Math.PI / 3.2}
-        maxPolarAngle={Math.PI / 1.55}
-        onUnlock={() => onFirstPersonActiveChange(false)}
-      />
-      <FirstPersonController
-        active={firstPersonActive}
-        room={room}
-        pointerLockControls={pointerLockControlsRef}
-        onActiveChange={onFirstPersonActiveChange}
-      />
+      <FirstPersonController active={firstPersonActive} />
       {generatedAvailable && marble.spzUrl ? (
         <MarbleSplatScene
           url={proxiedMarbleSpzUrl(marble.spzUrl)}
@@ -2311,7 +2272,8 @@ function MarbleSplatScene({
 
     const splat = new SplatMesh({ url, editable: true });
     splat.userData.captureHidden = true;
-    splat.quaternion.set(1, 0, 0, 0);
+    // Final orientation comes from applySplatAlignment (which honors flipX),
+    // so no preliminary quaternion seeding here.
     applySplatAlignment(splat, alignmentRef.current);
     applySplatOpacity(splat, opacityRef.current);
     applySplatObjectEdits(splat, regionsRef.current, selectedRef.current, objectSplatModeRef.current);
@@ -2347,8 +2309,9 @@ function MarbleSplatScene({
 
 function applySplatAlignment(mesh: SplatMesh, alignment: SplatAlignment) {
   const rotationY = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), alignment.rotationY);
+  const base = (alignment.flipX ?? true) ? SPARK_SPLAT_BASE_QUATERNION : SPLAT_IDENTITY_QUATERNION;
   mesh.position.set(...alignment.position);
-  mesh.quaternion.copy(SPARK_SPLAT_BASE_QUATERNION).premultiply(rotationY);
+  mesh.quaternion.copy(base).premultiply(rotationY);
   mesh.scale.setScalar(alignment.scale);
   mesh.updateMatrixWorld();
 }
@@ -2450,18 +2413,19 @@ function ViewportCamera() {
   return <PerspectiveCamera ref={cameraRef} makeDefault fov={44} />;
 }
 
-function FirstPersonController({
-  active,
-  room,
-  pointerLockControls,
-  onActiveChange,
-}: {
-  active: boolean;
-  room: RoomBounds;
-  pointerLockControls: RefObject<PointerLockControlsImpl | null>;
-  onActiveChange: (active: boolean) => void;
-}) {
-  const { camera } = useThree();
+/**
+ * First-person camera controller used inside the splat view.
+ *
+ * - Spawn pose: standing at the world origin (eye height ~1.6m), looking down
+ *   the camera's natural forward axis (-Z).
+ * - Look: drag with the left mouse button anywhere on the canvas to rotate
+ *   yaw + pitch (no pointer lock — the cursor stays visible).
+ * - Move: WASD; hold shift to sprint.
+ * - Bounds: position is clamped to a ±SPLAT_WALK_HALF_EXTENT box around the
+ *   origin so you can roam the room but not drift into the void.
+ */
+function FirstPersonController({ active }: { active: boolean }) {
+  const { camera, gl } = useThree();
   const cameraRef = useRef(camera);
   const keysRef = useRef<WalkKeys>({
     forward: false,
@@ -2470,51 +2434,109 @@ function FirstPersonController({
     right: false,
     fast: false,
   });
-  const roomRef = useRef(room);
+  const yawRef = useRef(0);
+  const pitchRef = useRef(0);
+  const draggingRef = useRef(false);
+  const dragPointerIdRef = useRef<number | null>(null);
+  const lastPointerRef = useRef({ x: 0, y: 0 });
   const forwardRef = useRef(new THREE.Vector3());
   const rightRef = useRef(new THREE.Vector3());
   const moveRef = useRef(new THREE.Vector3());
+  const eulerRef = useRef(new THREE.Euler(0, 0, 0, "YXZ"));
 
   useEffect(() => {
     cameraRef.current = camera;
   }, [camera]);
 
-  useEffect(() => {
-    roomRef.current = room;
-  }, [room]);
-
+  // Spawn at origin and reset look angles whenever we (re-)enter splat mode.
   useEffect(() => {
     const keys = keysRef.current;
 
     if (!active) {
       resetWalkKeys(keys);
-      if (pointerLockControls.current?.isLocked) pointerLockControls.current.unlock();
+      draggingRef.current = false;
       return;
     }
 
-    const activeCamera = cameraRef.current;
-    const eyeHeight = firstPersonEyeHeight(roomRef.current);
-    const centerX = (roomRef.current.minX + roomRef.current.maxX) / 2;
-    const centerZ = (roomRef.current.minZ + roomRef.current.maxZ) / 2;
-    const spawnZ = THREE.MathUtils.clamp(
-      roomRef.current.minZ + 0.9,
-      roomRef.current.minZ + WALK_WALL_MARGIN,
-      roomRef.current.maxZ - WALK_WALL_MARGIN,
-    );
-    activeCamera.position.set(centerX, eyeHeight, spawnZ);
-    activeCamera.lookAt(centerX, eyeHeight, centerZ);
-    activeCamera.updateProjectionMatrix();
+    yawRef.current = 0;
+    pitchRef.current = 0;
+    const cam = cameraRef.current;
+    cam.position.set(0, WALK_EYE_HEIGHT, 0);
+    applyLook(cam, yawRef.current, pitchRef.current, eulerRef.current);
+    cam.updateProjectionMatrix();
 
     return () => {
       resetWalkKeys(keys);
     };
-  }, [active, pointerLockControls]);
+  }, [active]);
 
+  // Drag-to-look on the canvas (no pointer lock — cursor stays visible).
+  useEffect(() => {
+    if (!active) return;
+    const element = gl.domElement;
+
+    function handlePointerDown(event: PointerEvent) {
+      if (event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey) return;
+      draggingRef.current = true;
+      dragPointerIdRef.current = event.pointerId;
+      lastPointerRef.current = { x: event.clientX, y: event.clientY };
+      try {
+        element.setPointerCapture(event.pointerId);
+      } catch {
+        // pointer capture occasionally throws on transient capture conflicts;
+        // dragging still works without it.
+      }
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      if (!draggingRef.current || event.pointerId !== dragPointerIdRef.current) return;
+      const dx = event.clientX - lastPointerRef.current.x;
+      const dy = event.clientY - lastPointerRef.current.y;
+      lastPointerRef.current = { x: event.clientX, y: event.clientY };
+      yawRef.current -= dx * SPLAT_LOOK_SENSITIVITY;
+      pitchRef.current = THREE.MathUtils.clamp(
+        pitchRef.current - dy * SPLAT_LOOK_SENSITIVITY,
+        -SPLAT_PITCH_LIMIT,
+        SPLAT_PITCH_LIMIT,
+      );
+      applyLook(cameraRef.current, yawRef.current, pitchRef.current, eulerRef.current);
+    }
+
+    function endDrag(event: PointerEvent) {
+      if (event.pointerId !== dragPointerIdRef.current) return;
+      draggingRef.current = false;
+      dragPointerIdRef.current = null;
+      try {
+        element.releasePointerCapture(event.pointerId);
+      } catch {
+        // safe to ignore — capture may already be released
+      }
+    }
+
+    element.addEventListener("pointerdown", handlePointerDown);
+    element.addEventListener("pointermove", handlePointerMove);
+    element.addEventListener("pointerup", endDrag);
+    element.addEventListener("pointercancel", endDrag);
+
+    return () => {
+      element.removeEventListener("pointerdown", handlePointerDown);
+      element.removeEventListener("pointermove", handlePointerMove);
+      element.removeEventListener("pointerup", endDrag);
+      element.removeEventListener("pointercancel", endDrag);
+    };
+  }, [active, gl.domElement]);
+
+  // WASD (works without pointer lock).
   useEffect(() => {
     if (!active) return;
     const keys = keysRef.current;
 
     function applyKey(event: KeyboardEvent, pressed: boolean) {
+      // Don't hijack typing inside text inputs (style prompt, etc.).
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+        return;
+      }
       const handled =
         event.code === "KeyW" ||
         event.code === "KeyA" ||
@@ -2543,7 +2565,6 @@ function FirstPersonController({
 
     function handleBlur() {
       resetWalkKeys(keys);
-      onActiveChange(false);
     }
 
     window.addEventListener("keydown", handleKeyDown);
@@ -2555,13 +2576,11 @@ function FirstPersonController({
       window.removeEventListener("keyup", handleKeyUp);
       window.removeEventListener("blur", handleBlur);
     };
-  }, [active, onActiveChange]);
+  }, [active]);
 
   useFrame((_, delta) => {
-    const activeCamera = cameraRef.current;
-    const controls = pointerLockControls.current;
-    if (!active || !controls?.isLocked) return;
-
+    if (!active) return;
+    const cam = cameraRef.current;
     const keys = keysRef.current;
     const forwardAmount = Number(keys.forward) - Number(keys.backward);
     const rightAmount = Number(keys.right) - Number(keys.left);
@@ -2570,10 +2589,11 @@ function FirstPersonController({
     const forward = forwardRef.current;
     const right = rightRef.current;
     const move = moveRef.current;
-    activeCamera.getWorldDirection(forward);
+    cam.getWorldDirection(forward);
     forward.y = 0;
+    if (forward.lengthSq() < 1e-6) return;
     forward.normalize();
-    right.setFromMatrixColumn(activeCamera.matrix, 0);
+    right.setFromMatrixColumn(cam.matrix, 0);
     right.y = 0;
     right.normalize();
     move.set(0, 0, 0).addScaledVector(forward, forwardAmount).addScaledVector(right, rightAmount);
@@ -2581,23 +2601,18 @@ function FirstPersonController({
 
     const distance = delta * WALK_SPEED * (keys.fast ? WALK_FAST_MULTIPLIER : 1);
     move.normalize().multiplyScalar(distance);
-    activeCamera.position.add(move);
-    activeCamera.position.set(
-      THREE.MathUtils.clamp(
-        activeCamera.position.x,
-        roomRef.current.minX + WALK_WALL_MARGIN,
-        roomRef.current.maxX - WALK_WALL_MARGIN,
-      ),
-      firstPersonEyeHeight(roomRef.current),
-      THREE.MathUtils.clamp(
-        activeCamera.position.z,
-        roomRef.current.minZ + WALK_WALL_MARGIN,
-        roomRef.current.maxZ - WALK_WALL_MARGIN,
-      ),
-    );
+    cam.position.add(move);
+    cam.position.x = THREE.MathUtils.clamp(cam.position.x, -SPLAT_WALK_HALF_EXTENT, SPLAT_WALK_HALF_EXTENT);
+    cam.position.z = THREE.MathUtils.clamp(cam.position.z, -SPLAT_WALK_HALF_EXTENT, SPLAT_WALK_HALF_EXTENT);
+    cam.position.y = WALK_EYE_HEIGHT;
   });
 
   return null;
+}
+
+function applyLook(camera: THREE.Camera, yaw: number, pitch: number, scratch: THREE.Euler) {
+  scratch.set(pitch, yaw, 0, "YXZ");
+  camera.quaternion.setFromEuler(scratch);
 }
 
 function resetWalkKeys(keys: WalkKeys) {
@@ -2606,10 +2621,6 @@ function resetWalkKeys(keys: WalkKeys) {
   keys.left = false;
   keys.right = false;
   keys.fast = false;
-}
-
-function firstPersonEyeHeight(room: RoomBounds) {
-  return THREE.MathUtils.clamp(WALK_EYE_HEIGHT, 0.6, Math.max(0.6, room.height - 0.25));
 }
 
 function clampCameraPosition(position: Vec3, room: RoomBounds): Vec3 {
@@ -2661,6 +2672,11 @@ function worldToClientPoint(position: Vec3, camera: THREE.Camera, element: HTMLC
 }
 
 function splatAlignmentFromMarble(marble: MarbleResult): SplatAlignment {
+  // Pre-baked local splats have authored defaults — they don't follow Marble's
+  // Y-down + 1m-unit convention.
+  const localOverride = marble.spzUrl ? LOCAL_SPLAT_DEFAULTS[marble.spzUrl] : undefined;
+  if (localOverride) return localOverride;
+
   const position = marble.payload?.metadata.capture?.camera?.position;
   if (!position) return DEFAULT_SPLAT_ALIGNMENT;
   return {
@@ -3210,6 +3226,15 @@ function SplatAlignmentControls({
           onChange={(value) => onAlignmentChange({ ...alignment, rotationY: THREE.MathUtils.degToRad(value) })}
         />
         <NumberControl label="Scale" value={alignment.scale} step={0.05} min={0.01} onChange={updateScale} />
+        <label className="col-span-2 flex items-center justify-between gap-2 rounded-sm border border-[var(--color-border)] bg-[var(--color-inset)] px-1.5 py-1 text-[10px] font-medium uppercase text-[var(--color-text-muted)]">
+          <span>Flip X (Y-up fix)</span>
+          <input
+            type="checkbox"
+            className="h-3.5 w-3.5"
+            checked={alignment.flipX ?? true}
+            onChange={(event) => onAlignmentChange({ ...alignment, flipX: event.target.checked })}
+          />
+        </label>
       </div>
     </DraggableViewportPanel>
   );
@@ -3248,6 +3273,19 @@ function NumberControl({
 
 function formatControlNumber(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(2);
+}
+
+function SplatWalkHint() {
+  return (
+    <div className="pointer-events-none absolute inset-x-0 bottom-3 mx-auto w-fit max-w-[90%] rounded-md border border-[var(--border-mid)] bg-[color-mix(in_srgb,#16181d_88%,transparent)] px-3 py-1.5 text-[11px] text-[var(--text-secondary)] shadow-[0_8px_24px_rgba(0,0,0,0.35)] [backdrop-filter:blur(6px)]">
+      <span className="font-mono text-[var(--text-bright)]">WASD</span>
+      <span className="mx-2 opacity-60">·</span>
+      <span>drag to look</span>
+      <span className="mx-2 opacity-60">·</span>
+      <span className="font-mono text-[var(--text-bright)]">Shift</span>
+      <span className="ml-1">to sprint</span>
+    </div>
+  );
 }
 
 function SplatViewportOverlay({ marble, loadState }: { marble: MarbleResult; loadState: SplatLoadState }) {
@@ -4130,6 +4168,9 @@ function proxiedModelUrl(modelUrl: string) {
 }
 
 function proxiedMarbleSpzUrl(spzUrl: string) {
+  // Local static assets (anything served straight out of public/) don't need
+  // — and shouldn't go through — the Marble CORS proxy.
+  if (spzUrl.startsWith("/") && !spzUrl.startsWith("//")) return spzUrl;
   return `/api/marble/splat?url=${encodeURIComponent(spzUrl)}`;
 }
 

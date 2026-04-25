@@ -184,6 +184,10 @@ export type MarbleResult = {
   spzUrl?: string;
   colliderMeshUrl?: string;
   error?: string;
+  /** 0..1 progress for the generation step. Optional; UI should fall back to status-based bands. */
+  progress?: number;
+  /** Estimated milliseconds remaining; only meaningful while `status === "generating"`. */
+  etaMs?: number;
 };
 
 export type CaptureImage = {

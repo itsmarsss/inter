@@ -7,7 +7,6 @@ import {
   openFurnitureMeshyStream,
   startFurnitureMeshyTask,
 } from "./api/meshy";
-import { generateRoomWithMarble, pollMarbleOperation } from "./api/marble";
 import { PrecisionLayout } from "./components/PrecisionLayout";
 import { SceneView } from "./components/SceneView";
 import { BlueprintView } from "./components/BlueprintView";
@@ -110,32 +109,83 @@ export default function App() {
   async function handleGenerateFinalRoom() {
     const runId = generationRunRef.current + 1;
     generationRunRef.current = runId;
-    const layoutPanoCapture = sceneCaptureRef.current?.();
-    const blueprintCapture = blueprintCaptureRef.current?.();
-    const captures: CaptureImage[] = [
-      layoutPanoCapture ?? null,
-      blueprintCapture ? { role: "blueprint", dataUrl: blueprintCapture } : null,
-    ].filter(Boolean) as CaptureImage[];
 
-    setState((current) => ({ ...current, marble: { status: "uploading" } }));
+    const totalDurationMs = 25_000;
+    const startedAt = performance.now();
 
-    const result = await generateRoomWithMarble({
-      room: state.room,
-      instances: state.furnitureInstances,
-      assets: state.furnitureAssets,
-      assetById,
-      shapes: state.customShapes,
-      projectTitle: state.projectTitle,
-      visibility: state.visibility,
-      workflowStep: "world",
-      templateId: state.selectedTemplateId,
-      panoramaOpacity: state.panoramaOpacity,
-      stylePrompt: state.stylePrompt,
-      captures,
-    });
+    setState((current) => ({
+      ...current,
+      marble: { status: "uploading", progress: 0, etaMs: totalDurationMs },
+    }));
+
+    // Tiny "uploading" beat so the UI doesn't snap straight to generating
+    await sleep(450);
+    if (generationRunRef.current !== runId) return;
+
+    setState((current) => ({
+      ...current,
+      marble: { status: "generating", progress: 0.02, etaMs: totalDurationMs - 450 },
+    }));
+
+    // Drive a non-linear progress curve — small ticks, occasional long stalls,
+    // and short "burst" jumps. Caps just shy of 100% so the final tick is the
+    // moment the splat URL becomes available.
+    let progress = 0.02;
+    let nextStallUntil = 0;
+    while (true) {
+      const elapsed = performance.now() - startedAt;
+      const elapsedFraction = Math.min(1, elapsed / totalDurationMs);
+
+      // A "smooth target" we're chasing — still nonlinear (cubic ease-out) so
+      // the bar feels lively early and slow late.
+      const smoothTarget = 1 - Math.pow(1 - elapsedFraction, 3);
+
+      // Sometimes stall for a chunk of time to imitate a real loader. Pick a
+      // new stall window every couple of seconds when one isn't already armed.
+      if (performance.now() > nextStallUntil && Math.random() < 0.18 && progress < 0.92) {
+        nextStallUntil = performance.now() + 600 + Math.random() * 1800;
+      }
+
+      const stalled = performance.now() < nextStallUntil;
+
+      if (!stalled) {
+        // Normal step: chase the smooth target, occasionally jump ahead.
+        const gap = Math.max(0, smoothTarget - progress);
+        const jitter = (Math.random() - 0.35) * 0.012;
+        let step = gap * 0.18 + Math.max(0, jitter);
+        if (Math.random() < 0.06) step += 0.04 + Math.random() * 0.06; // burst
+        progress = Math.min(0.985, progress + step);
+      } else {
+        // Tiny dribble during stalls so the bar isn't perfectly frozen.
+        progress = Math.min(0.97, progress + 0.0008);
+      }
+
+      const etaMs = Math.max(0, totalDurationMs - elapsed);
+      const snapshot = progress;
+      setState((current) => {
+        if (current.marble.status !== "generating") return current;
+        return {
+          ...current,
+          marble: { ...current.marble, progress: snapshot, etaMs },
+        };
+      });
+
+      if (elapsed >= totalDurationMs) break;
+      await sleep(120 + Math.random() * 180);
+      if (generationRunRef.current !== runId) return;
+    }
 
     if (generationRunRef.current !== runId) return;
-    setState((current) => ({ ...current, marble: result }));
+
+    setState((current) => ({
+      ...current,
+      marble: {
+        status: "complete",
+        progress: 1,
+        etaMs: 0,
+        spzUrl: LOCAL_SPLAT_URL,
+      },
+    }));
   }
 
   function handleCancelRun() {
@@ -164,70 +214,6 @@ export default function App() {
       furnitureAssets: [asset, ...current.furnitureAssets],
     }));
   }
-
-  useEffect(() => {
-    const operationId = state.marble.operationId;
-    if (state.marble.status !== "generating" || !operationId) return;
-    const activeOperationId = operationId;
-
-    let active = true;
-    let inFlight = false;
-
-    async function poll() {
-      if (inFlight) return;
-      inFlight = true;
-      try {
-        const result = await pollMarbleOperation(activeOperationId);
-        if (!active) return;
-        setState((current) => {
-          if (current.marble.operationId !== activeOperationId) return current;
-          const nextMarble = {
-            ...current.marble,
-            ...result,
-            payload: result.payload ?? current.marble.payload,
-            error: result.status === "generating" ? undefined : result.error,
-          };
-          if (sameMarbleResult(current.marble, nextMarble)) return current;
-          return {
-            ...current,
-            marble: nextMarble,
-          };
-        });
-      } catch (error) {
-        if (!active) return;
-        const message = error instanceof Error ? error.message : "Marble polling failed.";
-        setState((current) => {
-          if (current.marble.operationId !== activeOperationId) return current;
-          if (
-            current.marble.status === "generating" &&
-            current.marble.operationId === activeOperationId &&
-            current.marble.error === message
-          ) {
-            return current;
-          }
-          return {
-            ...current,
-            marble: {
-              ...current.marble,
-              status: "generating",
-              operationId: activeOperationId,
-              error: message,
-            },
-          };
-        });
-      } finally {
-        inFlight = false;
-      }
-    }
-
-    void poll();
-    const intervalId = window.setInterval(() => void poll(), 5000);
-
-    return () => {
-      active = false;
-      window.clearInterval(intervalId);
-    };
-  }, [state.marble.operationId, state.marble.status]);
 
   const setRoom: React.ComponentProps<typeof SceneView>["onRoomChange"] = (room) =>
     setState((current) => ({ ...current, room }));
@@ -421,14 +407,12 @@ export default function App() {
   );
 }
 
-function sameMarbleResult(left: EditorState["marble"], right: EditorState["marble"]) {
-  return left.status === right.status &&
-    left.operationId === right.operationId &&
-    left.worldUrl === right.worldUrl &&
-    left.thumbnailUrl === right.thumbnailUrl &&
-    left.panoUrl === right.panoUrl &&
-    left.spzUrl === right.spzUrl &&
-    left.colliderMeshUrl === right.colliderMeshUrl &&
-    left.error === right.error &&
-    left.payload === right.payload;
+/**
+ * Pre-baked splat we render in place of the (now disabled) WorldLabs Marble
+ * generation pipeline. Served by Next.js as a static asset out of `public/`.
+ */
+const LOCAL_SPLAT_URL = "/splats/sleek-icelandic-bedroom.spz";
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
