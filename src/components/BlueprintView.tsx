@@ -42,7 +42,14 @@ type BlueprintViewProps = {
   onShapesChange: (shapes: CustomShape[]) => void;
   onDoorsChange?: (doors: Door[]) => void;
   onWindowsChange?: (windows: WindowOpening[]) => void;
-  registerBlueprintCapture: (capture: () => string | undefined) => void;
+  registerBlueprintCapture?: (capture: () => string | undefined) => void;
+  /**
+   * When false, the blueprint becomes a non-interactive preview: pointer
+   * handlers are no-ops and pointer events on the SVG are disabled. Used by
+   * the always-on minimap so the user can't accidentally drag walls in the
+   * tiny preview.
+   */
+  interactive?: boolean;
 };
 
 type OpeningDragSession = {
@@ -94,6 +101,7 @@ export function BlueprintView({
   onDoorsChange,
   onWindowsChange,
   registerBlueprintCapture,
+  interactive = true,
 }: BlueprintViewProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [draggingWall, setDraggingWall] = useState<WallId | null>(null);
@@ -123,6 +131,7 @@ export function BlueprintView({
   }, [room, wallSegments]);
 
   useEffect(() => {
+    if (!registerBlueprintCapture) return;
     registerBlueprintCapture(() => {
       if (!svgRef.current) return undefined;
       const source = new XMLSerializer().serializeToString(svgRef.current);
@@ -373,17 +382,20 @@ export function BlueprintView({
   }
 
   return (
-    <div className="h-full bg-[var(--color-background)] p-2">
+    <div
+      className={`h-full bg-[var(--color-background)] ${interactive ? "p-2" : "p-0"}`}
+      style={interactive ? undefined : { pointerEvents: "none" }}
+    >
       <svg
         ref={svgRef}
         role="img"
         aria-label="Live room blueprint"
         viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`}
-        className="h-full w-full rounded-md border border-[var(--color-border)] bg-[#ECF1F2]"
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerEnd}
-        onPointerCancel={handlePointerEnd}
-        onPointerDown={() => onSelect(null)}
+        className={`h-full w-full bg-[#ECF1F2] ${interactive ? "rounded-md border border-[var(--color-border)]" : ""}`}
+        onPointerMove={interactive ? handlePointerMove : undefined}
+        onPointerUp={interactive ? handlePointerEnd : undefined}
+        onPointerCancel={interactive ? handlePointerEnd : undefined}
+        onPointerDown={interactive ? () => onSelect(null) : undefined}
       >
         <defs>
           <pattern id="bp-grid" width="0.5" height="0.5" patternUnits="userSpaceOnUse">
