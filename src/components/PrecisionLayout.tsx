@@ -6,7 +6,6 @@ import type {
   Door,
   FurnitureAsset,
   FurnitureAssetMap,
-  FurnitureInstance,
   MarbleResult,
   RoomBounds,
   SceneCamera,
@@ -34,7 +33,6 @@ type PrecisionLayoutProps = {
   blueprintPreview: ReactNode;
 
   furnitureAssets: FurnitureAsset[];
-  furnitureInstances: FurnitureInstance[];
   customShapes: CustomShape[];
   cameras: SceneCamera[];
   doors: Door[];
@@ -75,7 +73,6 @@ export function PrecisionLayout({
   blueprint,
   blueprintPreview,
   furnitureAssets,
-  furnitureInstances,
   customShapes,
   cameras,
   doors,

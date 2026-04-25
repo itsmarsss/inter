@@ -386,7 +386,6 @@ export default function App() {
         />
       }
       furnitureAssets={state.furnitureAssets}
-      furnitureInstances={state.furnitureInstances}
       customShapes={state.customShapes}
       cameras={state.cameras}
       doors={state.doors}
