@@ -13,7 +13,7 @@ const tools: Array<{ id: ToolMode; label: string; icon: React.ComponentType<{ cl
   { id: "select", label: "Select", icon: MousePointer2 },
   { id: "move", label: "Move", icon: Move },
   { id: "rotate", label: "Rotate", icon: RotateCw },
-  { id: "scale", label: "Scale", icon: Scaling },
+  { id: "scale", label: "Resize", icon: Scaling },
   { id: "add-wall", label: "Add Wall", icon: Cuboid },
   { id: "add-furniture", label: "Generate 3D Model", icon: Box },
   { id: "add-camera", label: "Add Camera", icon: Camera },

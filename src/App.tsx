@@ -296,6 +296,7 @@ export default function App() {
             instances={state.furnitureInstances}
             shapes={state.customShapes}
             selected={state.selected}
+            tool={state.tool}
             onSelect={(selected) => setState((current) => ({ ...current, selected }))}
             onRoomChange={(room) => setState((current) => ({ ...current, room }))}
             onInstancesChange={(furnitureInstances) =>
@@ -313,6 +314,7 @@ export default function App() {
             instances={state.furnitureInstances}
             shapes={state.customShapes}
             selected={state.selected}
+            tool={state.tool}
             onSelect={(selected) => setState((current) => ({ ...current, selected }))}
             onRoomChange={(room) => setState((current) => ({ ...current, room }))}
             onInstancesChange={(furnitureInstances) =>

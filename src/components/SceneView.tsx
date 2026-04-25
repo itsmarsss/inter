@@ -83,6 +83,12 @@ type WallDragSession = {
   wall: WallId;
   pointerId: number;
   grabOffset: number;
+  startValue: number;
+  startClientX: number;
+  startClientY: number;
+  screenAxisX: number;
+  screenAxisY: number;
+  screenAxisLengthSq: number;
   latestClientX: number;
   latestClientY: number;
   rafId: number | null;
@@ -657,11 +663,27 @@ function SceneContent({
       return wall === "east" || wall === "west" ? point[0] : point[2];
     }
 
+    function valueFromScreenDrag(session: WallDragSession) {
+      if (session.screenAxisLengthSq < 16) return null;
+
+      const deltaX = session.latestClientX - session.startClientX;
+      const deltaY = session.latestClientY - session.startClientY;
+      const metersAlongAxis =
+        (deltaX * session.screenAxisX + deltaY * session.screenAxisY) / session.screenAxisLengthSq;
+      return session.startValue + metersAlongAxis;
+    }
+
     function applyWallDrag() {
       const session = wallDragRef.current;
       if (!session) return;
 
       session.rafId = null;
+      const screenValue = valueFromScreenDrag(session);
+      if (screenValue !== null) {
+        onRoomChangeRef.current(resizeRoomFromWall(roomRef.current, session.wall, screenValue));
+        return;
+      }
+
       const point = projectPointerToFloor(session.latestClientX, session.latestClientY);
       if (!point) return;
 
@@ -848,6 +870,12 @@ function SceneContent({
     onCamerasChange(cameras.map((camera) => (camera.id === next.id ? next : camera)));
   }
 
+  function handleTransformActiveChange(active: boolean) {
+    const controls = orbitControlsRef.current;
+    if (!controls) return;
+    controls.enabled = !active && !firstPersonActive;
+  }
+
   function handleFloorPointerDown(event: ThreeEvent<PointerEvent>) {
     if (viewMode !== "blockout") return;
     if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
@@ -874,19 +902,27 @@ function SceneContent({
   }
 
   function handleWallPointerDown(wall: WallId, event: ThreeEvent<PointerEvent>) {
-    if (viewMode !== "blockout") return;
+    if (blockoutOpacity <= 0 || firstPersonActive) return;
     if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
 
     event.stopPropagation();
     const point = projectPointerToFloor(event.clientX, event.clientY);
     const projectedValue = point ? (wall === "east" || wall === "west" ? point[0] : point[2]) : 0;
-    const wallAxisValue = wall === "east" || wall === "west" ? wallPosition(roomRef.current, wall)[0] : wallPosition(roomRef.current, wall)[2];
+    const wallCenter = wallPosition(roomRef.current, wall);
+    const wallAxisValue = wall === "east" || wall === "west" ? wallCenter[0] : wallCenter[2];
+    const screenAxis = screenAxisForWall(wall, wallCenter, camera, gl.domElement);
     const controls = orbitControlsRef.current;
 
     wallDragRef.current = {
       wall,
       pointerId: event.pointerId,
       grabOffset: projectedValue - wallAxisValue,
+      startValue: wallAxisValue,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      screenAxisX: screenAxis.x,
+      screenAxisY: screenAxis.y,
+      screenAxisLengthSq: screenAxis.lengthSq,
       latestClientX: event.clientX,
       latestClientY: event.clientY,
       rafId: null,
@@ -989,7 +1025,7 @@ function SceneContent({
           room={room}
           selected={selected}
           hovered={hoveredWall ? { type: "wall", id: hoveredWall } : hovered}
-          editable={viewMode === "blockout"}
+          editable={blockoutOpacity > 0 && !firstPersonActive}
           opacity={blockoutOpacity}
           onReferenceSelect={() => onSelect(null)}
           onWallPointerDown={handleWallPointerDown}
@@ -1013,6 +1049,7 @@ function SceneContent({
               onDragStart={(event) =>
                 handleObjectPointerDown({ type: "furniture", id: instance.id }, instance.position, event)
               }
+              onTransformActiveChange={handleTransformActiveChange}
               onChange={updateInstance}
             />
           );
@@ -1028,6 +1065,7 @@ function SceneContent({
             opacity={blockoutOpacity}
             onSelect={() => onSelect(viewMode === "blockout" ? { type: "shape", id: shape.id } : null)}
             onDragStart={(event) => handleObjectPointerDown({ type: "shape", id: shape.id }, shape.position, event)}
+            onTransformActiveChange={handleTransformActiveChange}
             onChange={updateShape}
           />
         ))}
@@ -1042,6 +1080,7 @@ function SceneContent({
             opacity={blockoutOpacity}
             onSelect={() => onSelect(viewMode === "blockout" ? { type: "camera", id: sceneCamera.id } : null)}
             onDragStart={(event) => handleObjectPointerDown({ type: "camera", id: sceneCamera.id }, sceneCamera.position, event)}
+            onTransformActiveChange={handleTransformActiveChange}
             onChange={updateCamera}
           />
         ))}
@@ -1486,6 +1525,27 @@ function clampCameraPosition(position: Vec3, room: RoomBounds): Vec3 {
   ];
 }
 
+function screenAxisForWall(wall: WallId, wallCenter: Vec3, camera: THREE.Camera, element: HTMLCanvasElement) {
+  const axisEnd: Vec3 =
+    wall === "east" || wall === "west"
+      ? [wallCenter[0] + 1, wallCenter[1], wallCenter[2]]
+      : [wallCenter[0], wallCenter[1], wallCenter[2] + 1];
+  const start = worldToClientPoint(wallCenter, camera, element);
+  const end = worldToClientPoint(axisEnd, camera, element);
+  const x = end.x - start.x;
+  const y = end.y - start.y;
+  return { x, y, lengthSq: x * x + y * y };
+}
+
+function worldToClientPoint(position: Vec3, camera: THREE.Camera, element: HTMLCanvasElement) {
+  const rect = element.getBoundingClientRect();
+  const projected = new THREE.Vector3(...position).project(camera);
+  return {
+    x: rect.left + ((projected.x + 1) / 2) * rect.width,
+    y: rect.top + ((1 - projected.y) / 2) * rect.height,
+  };
+}
+
 function splatAlignmentFromMarble(marble: MarbleResult): SplatAlignment {
   const position = marble.payload?.metadata.capture?.camera?.position;
   if (!position) return DEFAULT_SPLAT_ALIGNMENT;
@@ -1878,11 +1938,10 @@ function WallMesh({ wall, room, selected, hovered, opacity, onPointerDown, onPoi
   return (
     <group
       position={wallPosition(room, wall)}
-      onPointerDown={onPointerDown}
       onPointerOver={onPointerOver}
       onPointerOut={onPointerOut}
     >
-      <mesh castShadow receiveShadow>
+      <mesh castShadow receiveShadow onPointerDown={onPointerDown}>
         <boxGeometry args={visibleSize} />
         <meshStandardMaterial
           color={selected ? SCENE_COLORS.wallSelected : SCENE_COLORS.wall}
@@ -1907,7 +1966,7 @@ function WallMesh({ wall, room, selected, hovered, opacity, onPointerDown, onPoi
       </mesh>
       {selected ? (
         <>
-          <mesh position={[0, visibleSize[1] * 0.42, 0]}>
+          <mesh position={[0, visibleSize[1] * 0.42, 0]} onPointerDown={onPointerDown}>
             <boxGeometry args={handleSize} />
             <meshStandardMaterial
               color={SCENE_COLORS.wallSelected}
@@ -1926,7 +1985,7 @@ function WallMesh({ wall, room, selected, hovered, opacity, onPointerDown, onPoi
           </Html>
         </>
       ) : null}
-      <mesh>
+      <mesh onPointerDown={onPointerDown}>
         <boxGeometry args={hitSize} />
         <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
@@ -1944,10 +2003,23 @@ type FurnitureNodeProps = {
   opacity: number;
   onSelect: () => void;
   onDragStart: (event: ThreeEvent<PointerEvent>) => void;
+  onTransformActiveChange: (active: boolean) => void;
   onChange: (instance: FurnitureInstance) => void;
 };
 
-function FurnitureNode({ instance, asset, room, selected, hovered, tool, opacity, onSelect, onDragStart, onChange }: FurnitureNodeProps) {
+function FurnitureNode({
+  instance,
+  asset,
+  room,
+  selected,
+  hovered,
+  tool,
+  opacity,
+  onSelect,
+  onDragStart,
+  onTransformActiveChange,
+  onChange,
+}: FurnitureNodeProps) {
   const groupRef = useRef<THREE.Group>(null);
   const transformMode = tool === "rotate" ? "rotate" : tool === "scale" ? "scale" : "translate";
   const modelUrl = asset?.modelUrl ? proxiedModelUrl(asset.modelUrl) : undefined;
@@ -2006,7 +2078,15 @@ function FurnitureNode({ instance, asset, room, selected, hovered, tool, opacity
   if (!selected || tool === "select" || tool === "add-wall" || tool === "add-furniture" || tool === "add-shape") return content;
 
   return (
-    <TransformControls mode={transformMode} onObjectChange={pushTransform} onMouseUp={pushTransform}>
+    <TransformControls
+      mode={transformMode}
+      onMouseDown={() => onTransformActiveChange(true)}
+      onObjectChange={pushTransform}
+      onMouseUp={() => {
+        pushTransform();
+        onTransformActiveChange(false);
+      }}
+    >
       {content}
     </TransformControls>
   );
@@ -2021,10 +2101,22 @@ type ShapeNodeProps = {
   opacity: number;
   onSelect: () => void;
   onDragStart: (event: ThreeEvent<PointerEvent>) => void;
+  onTransformActiveChange: (active: boolean) => void;
   onChange: (shape: CustomShape) => void;
 };
 
-function ShapeNode({ shape, room, selected, hovered, tool, opacity, onSelect, onDragStart, onChange }: ShapeNodeProps) {
+function ShapeNode({
+  shape,
+  room,
+  selected,
+  hovered,
+  tool,
+  opacity,
+  onSelect,
+  onDragStart,
+  onTransformActiveChange,
+  onChange,
+}: ShapeNodeProps) {
   const groupRef = useRef<THREE.Group>(null);
   const transformMode = tool === "rotate" ? "rotate" : tool === "scale" ? "scale" : "translate";
 
@@ -2073,7 +2165,15 @@ function ShapeNode({ shape, room, selected, hovered, tool, opacity, onSelect, on
   }
 
   return (
-    <TransformControls mode={transformMode} onObjectChange={pushTransform} onMouseUp={pushTransform}>
+    <TransformControls
+      mode={transformMode}
+      onMouseDown={() => onTransformActiveChange(true)}
+      onObjectChange={pushTransform}
+      onMouseUp={() => {
+        pushTransform();
+        onTransformActiveChange(false);
+      }}
+    >
       {content}
     </TransformControls>
   );
@@ -2088,6 +2188,7 @@ type SceneCameraNodeProps = {
   opacity: number;
   onSelect: () => void;
   onDragStart: (event: ThreeEvent<PointerEvent>) => void;
+  onTransformActiveChange: (active: boolean) => void;
   onChange: (camera: SceneCamera) => void;
 };
 
@@ -2100,6 +2201,7 @@ function SceneCameraNode({
   opacity,
   onSelect,
   onDragStart,
+  onTransformActiveChange,
   onChange,
 }: SceneCameraNodeProps) {
   const groupRef = useRef<THREE.Group>(null);
@@ -2148,7 +2250,15 @@ function SceneCameraNode({
   }
 
   return (
-    <TransformControls mode={transformMode} onObjectChange={pushTransform} onMouseUp={pushTransform}>
+    <TransformControls
+      mode={transformMode}
+      onMouseDown={() => onTransformActiveChange(true)}
+      onObjectChange={pushTransform}
+      onMouseUp={() => {
+        pushTransform();
+        onTransformActiveChange(false);
+      }}
+    >
       {content}
     </TransformControls>
   );

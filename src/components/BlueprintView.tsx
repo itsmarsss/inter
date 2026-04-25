@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
-import type { CustomShape, FurnitureAsset, FurnitureAssetMap, FurnitureInstance, RoomBounds, SelectedRef, WallId } from "../state/types";
+import type {
+  CustomShape,
+  FurnitureAsset,
+  FurnitureAssetMap,
+  FurnitureInstance,
+  RoomBounds,
+  SelectedRef,
+  ToolMode,
+  Vec3,
+  WallId,
+} from "../state/types";
 import { clampToRoom, resizeRoomFromWall, roomDimensions } from "../state/editor";
 
 type BlueprintViewProps = {
@@ -10,6 +20,7 @@ type BlueprintViewProps = {
   instances: FurnitureInstance[];
   shapes: CustomShape[];
   selected: SelectedRef;
+  tool: ToolMode;
   onSelect: (selected: SelectedRef) => void;
   onRoomChange: (room: RoomBounds) => void;
   onInstancesChange: (instances: FurnitureInstance[]) => void;
@@ -17,11 +28,26 @@ type BlueprintViewProps = {
   registerBlueprintCapture: (capture: () => string | undefined) => void;
 };
 
-type BlueprintObjectDrag = {
+type BlueprintObjectTransform = {
   target: Extract<NonNullable<SelectedRef>, { type: "furniture" | "shape" }>;
+  mode: "move" | "rotate" | "scale";
+  startPointer: { x: number; z: number };
+  startPosition: Vec3;
+  startRotationY: number;
+  startScale: Vec3;
   grabOffsetX: number;
   grabOffsetZ: number;
   y: number;
+  baseWidth: number;
+  baseDepth: number;
+};
+
+type BlueprintObjectMetrics = {
+  position: Vec3;
+  rotationY: number;
+  scale: Vec3;
+  width: number;
+  depth: number;
 };
 
 export function BlueprintView({
@@ -31,6 +57,7 @@ export function BlueprintView({
   instances,
   shapes,
   selected,
+  tool,
   onSelect,
   onRoomChange,
   onInstancesChange,
@@ -39,7 +66,7 @@ export function BlueprintView({
 }: BlueprintViewProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [draggingWall, setDraggingWall] = useState<WallId | null>(null);
-  const [draggingObject, setDraggingObject] = useState<BlueprintObjectDrag | null>(null);
+  const [objectTransform, setObjectTransform] = useState<BlueprintObjectTransform | null>(null);
   const view = useMemo(() => {
     const padding = 1.2;
     return {
@@ -110,8 +137,42 @@ export function BlueprintView({
 
   function beginObjectDrag(
     target: Extract<NonNullable<SelectedRef>, { type: "furniture" | "shape" }>,
-    position: FurnitureInstance["position"] | CustomShape["position"],
+    metrics: BlueprintObjectMetrics,
     event: ReactPointerEvent<SVGGElement>,
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (tool !== "select" && tool !== "move") {
+      onSelect(target);
+      return;
+    }
+
+    const point = pointFromPointer(event.clientX, event.clientY);
+    if (!point) return;
+
+    onSelect(target);
+    setObjectTransform({
+      target,
+      mode: "move",
+      startPointer: { x: point.x, z: point.y },
+      startPosition: metrics.position,
+      startRotationY: metrics.rotationY,
+      startScale: metrics.scale,
+      grabOffsetX: point.x - metrics.position[0],
+      grabOffsetZ: point.y - metrics.position[2],
+      y: metrics.position[1],
+      baseWidth: metrics.width,
+      baseDepth: metrics.depth,
+    });
+    svgRef.current?.setPointerCapture(event.pointerId);
+  }
+
+  function beginObjectHandleDrag(
+    mode: "rotate" | "scale",
+    target: Extract<NonNullable<SelectedRef>, { type: "furniture" | "shape" }>,
+    metrics: BlueprintObjectMetrics,
+    event: ReactPointerEvent<SVGElement>,
   ) {
     event.preventDefault();
     event.stopPropagation();
@@ -120,42 +181,52 @@ export function BlueprintView({
     if (!point) return;
 
     onSelect(target);
-    setDraggingObject({
+    setObjectTransform({
       target,
-      grabOffsetX: point.x - position[0],
-      grabOffsetZ: point.y - position[2],
-      y: position[1],
+      mode,
+      startPointer: { x: point.x, z: point.y },
+      startPosition: metrics.position,
+      startRotationY: metrics.rotationY,
+      startScale: metrics.scale,
+      grabOffsetX: 0,
+      grabOffsetZ: 0,
+      y: metrics.position[1],
+      baseWidth: metrics.width,
+      baseDepth: metrics.depth,
     });
     svgRef.current?.setPointerCapture(event.pointerId);
   }
 
   function updateObjectDrag(event: ReactPointerEvent<SVGSVGElement>) {
-    if (!draggingObject) return;
+    if (!objectTransform) return;
 
     const point = pointFromPointer(event.clientX, event.clientY);
     if (!point) return;
 
-    const nextPosition = clampToRoom(
-      [point.x - draggingObject.grabOffsetX, draggingObject.y, point.y - draggingObject.grabOffsetZ],
-      room,
-    );
+    const next = transformObjectFromPointer(objectTransform, point.x, point.y, room);
 
-    if (draggingObject.target.type === "furniture") {
+    if (objectTransform.target.type === "furniture") {
       onInstancesChange(
         instances.map((instance) =>
-          instance.id === draggingObject.target.id ? { ...instance, position: nextPosition } : instance,
+          instance.id === objectTransform.target.id
+            ? { ...instance, position: next.position, rotation: next.rotation, scale: next.scale }
+            : instance,
         ),
       );
       return;
     }
 
     onShapesChange(
-      shapes.map((shape) => (shape.id === draggingObject.target.id ? { ...shape, position: nextPosition } : shape)),
+      shapes.map((shape) =>
+        shape.id === objectTransform.target.id
+          ? { ...shape, position: next.position, rotation: next.rotation, scale: next.scale }
+          : shape,
+      ),
     );
   }
 
   function endObjectDrag(event: ReactPointerEvent<SVGSVGElement>) {
-    if (!draggingObject) return;
+    if (!objectTransform) return;
 
     try {
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
@@ -165,7 +236,7 @@ export function BlueprintView({
       // Pointer capture can already be released by the browser.
     }
 
-    setDraggingObject(null);
+    setObjectTransform(null);
   }
 
   function handlePointerMove(event: ReactPointerEvent<SVGSVGElement>) {
@@ -261,13 +332,14 @@ export function BlueprintView({
         {instances.map((instance) => {
           const asset = assetById?.get(instance.assetId) ?? assets.find((item) => item.id === instance.assetId);
           const footprint = footprintFor(asset?.primitive);
+          const metrics = objectMetrics(instance.position, instance.rotation[1], instance.scale, footprint.width, footprint.depth);
           const isSelected = selected?.type === "furniture" && selected.id === instance.id;
           return (
             <g
               key={instance.id}
               transform={`translate(${instance.position[0]} ${instance.position[2]}) rotate(${(instance.rotation[1] * 180) / Math.PI}) scale(${instance.scale[0]} ${instance.scale[2]})`}
               onPointerDown={(event) =>
-                beginObjectDrag({ type: "furniture", id: instance.id }, instance.position, event)
+                beginObjectDrag({ type: "furniture", id: instance.id }, metrics, event)
               }
               className={isSelected ? "cursor-move" : "cursor-pointer"}
             >
@@ -289,11 +361,12 @@ export function BlueprintView({
         })}
         {shapes.map((shape) => {
           const isSelected = selected?.type === "shape" && selected.id === shape.id;
+          const metrics = objectMetrics(shape.position, shape.rotation[1], shape.scale, 1, 1);
           return (
             <g
               key={shape.id}
               transform={`translate(${shape.position[0]} ${shape.position[2]}) rotate(${(shape.rotation[1] * 180) / Math.PI}) scale(${shape.scale[0]} ${shape.scale[2]})`}
-              onPointerDown={(event) => beginObjectDrag({ type: "shape", id: shape.id }, shape.position, event)}
+              onPointerDown={(event) => beginObjectDrag({ type: "shape", id: shape.id }, metrics, event)}
               className={isSelected ? "cursor-move" : "cursor-pointer"}
             >
               {shape.kind === "sphere" || shape.kind === "cylinder" || shape.kind === "cone" ? (
@@ -323,9 +396,220 @@ export function BlueprintView({
             </g>
           );
         })}
+        <BlueprintObjectHandles
+          selected={selected}
+          instances={instances}
+          shapes={shapes}
+          assets={assets}
+          assetById={assetById}
+          tool={tool}
+          onPointerDown={beginObjectHandleDrag}
+        />
       </svg>
     </div>
   );
+}
+
+function transformObjectFromPointer(
+  session: BlueprintObjectTransform,
+  pointerX: number,
+  pointerZ: number,
+  room: RoomBounds,
+) {
+  if (session.mode === "move") {
+    return {
+      position: clampToRoom([pointerX - session.grabOffsetX, session.y, pointerZ - session.grabOffsetZ], room),
+      rotation: [0, session.startRotationY, 0] as Vec3,
+      scale: session.startScale,
+    };
+  }
+
+  if (session.mode === "rotate") {
+    const startAngle = Math.atan2(
+      session.startPointer.z - session.startPosition[2],
+      session.startPointer.x - session.startPosition[0],
+    );
+    const currentAngle = Math.atan2(pointerZ - session.startPosition[2], pointerX - session.startPosition[0]);
+    return {
+      position: session.startPosition,
+      rotation: [0, session.startRotationY + currentAngle - startAngle, 0] as Vec3,
+      scale: session.startScale,
+    };
+  }
+
+  const startDistance = objectScaleDistance(
+    session.startPointer.x,
+    session.startPointer.z,
+    session.startPosition,
+    session.startRotationY,
+    session.baseWidth,
+    session.baseDepth,
+  );
+  const currentDistance = objectScaleDistance(
+    pointerX,
+    pointerZ,
+    session.startPosition,
+    session.startRotationY,
+    session.baseWidth,
+    session.baseDepth,
+  );
+  const factor = Math.min(5, Math.max(0.2, currentDistance / Math.max(0.001, startDistance)));
+
+  return {
+    position: session.startPosition,
+    rotation: [0, session.startRotationY, 0] as Vec3,
+    scale: [
+      Math.max(0.05, session.startScale[0] * factor),
+      Math.max(0.05, session.startScale[1] * factor),
+      Math.max(0.05, session.startScale[2] * factor),
+    ] as Vec3,
+  };
+}
+
+function objectScaleDistance(
+  pointerX: number,
+  pointerZ: number,
+  position: Vec3,
+  rotationY: number,
+  baseWidth: number,
+  baseDepth: number,
+) {
+  const dx = pointerX - position[0];
+  const dz = pointerZ - position[2];
+  const cos = Math.cos(-rotationY);
+  const sin = Math.sin(-rotationY);
+  const localX = dx * cos - dz * sin;
+  const localZ = dx * sin + dz * cos;
+  return Math.max(Math.abs(localX) / Math.max(0.001, baseWidth / 2), Math.abs(localZ) / Math.max(0.001, baseDepth / 2));
+}
+
+function objectMetrics(position: Vec3, rotationY: number, scale: Vec3, width: number, depth: number): BlueprintObjectMetrics {
+  return { position, rotationY, scale, width, depth };
+}
+
+function BlueprintObjectHandles({
+  selected,
+  instances,
+  shapes,
+  assets,
+  assetById,
+  tool,
+  onPointerDown,
+}: {
+  selected: SelectedRef;
+  instances: FurnitureInstance[];
+  shapes: CustomShape[];
+  assets: FurnitureAsset[];
+  assetById?: FurnitureAssetMap;
+  tool: ToolMode;
+  onPointerDown: (
+    mode: "rotate" | "scale",
+    target: Extract<NonNullable<SelectedRef>, { type: "furniture" | "shape" }>,
+    metrics: BlueprintObjectMetrics,
+    event: ReactPointerEvent<SVGElement>,
+  ) => void;
+}) {
+  if (!selected || (selected.type !== "furniture" && selected.type !== "shape")) return null;
+
+  const target = selected;
+  const metrics = selected.type === "furniture"
+    ? furnitureHandleMetrics(selected.id, instances, assets, assetById)
+    : shapeHandleMetrics(selected.id, shapes);
+  if (!metrics) return null;
+
+  const visibleWidth = Math.max(0.18, metrics.width * Math.abs(metrics.scale[0]));
+  const visibleDepth = Math.max(0.18, metrics.depth * Math.abs(metrics.scale[2]));
+  const rotationDeg = (metrics.rotationY * 180) / Math.PI;
+  const scaleHandleX = visibleWidth / 2;
+  const scaleHandleZ = visibleDepth / 2;
+  const rotateHandleZ = -visibleDepth / 2 - 0.46;
+  const showRotate = tool === "rotate" || tool === "select" || tool === "move";
+  const showScale = tool === "scale" || tool === "select" || tool === "move";
+
+  return (
+    <g
+      transform={`translate(${metrics.position[0]} ${metrics.position[2]}) rotate(${rotationDeg})`}
+      pointerEvents="all"
+    >
+      <rect
+        x={-visibleWidth / 2}
+        y={-visibleDepth / 2}
+        width={visibleWidth}
+        height={visibleDepth}
+        fill="none"
+        stroke="#3BA7FF"
+        strokeWidth="0.055"
+        strokeDasharray="0.14 0.09"
+        pointerEvents="none"
+      />
+      {showRotate ? (
+        <>
+          <line
+            x1="0"
+            y1={-visibleDepth / 2}
+            x2="0"
+            y2={rotateHandleZ}
+            stroke="#3BA7FF"
+            strokeWidth="0.04"
+            pointerEvents="none"
+          />
+          <circle
+            cx="0"
+            cy={rotateHandleZ}
+            r="0.16"
+            fill="#3BA7FF"
+            stroke="#071014"
+            strokeWidth="0.035"
+            onPointerDown={(event) => onPointerDown("rotate", target, metrics, event)}
+            style={{ cursor: "grab" }}
+          />
+        </>
+      ) : null}
+      {showScale ? (
+        <>
+          {[
+            [-scaleHandleX, -scaleHandleZ],
+            [scaleHandleX, -scaleHandleZ],
+            [scaleHandleX, scaleHandleZ],
+            [-scaleHandleX, scaleHandleZ],
+          ].map(([x, z]) => (
+            <rect
+              key={`${x}-${z}`}
+              x={x - 0.13}
+              y={z - 0.13}
+              width="0.26"
+              height="0.26"
+              rx="0.045"
+              fill="#FFF9EE"
+              stroke="#3BA7FF"
+              strokeWidth="0.045"
+              onPointerDown={(event) => onPointerDown("scale", target, metrics, event)}
+              style={{ cursor: "nwse-resize" }}
+            />
+          ))}
+        </>
+      ) : null}
+    </g>
+  );
+}
+
+function furnitureHandleMetrics(
+  id: string,
+  instances: FurnitureInstance[],
+  assets: FurnitureAsset[],
+  assetById?: FurnitureAssetMap,
+): BlueprintObjectMetrics | null {
+  const instance = instances.find((item) => item.id === id);
+  if (!instance) return null;
+  const asset = assetById?.get(instance.assetId) ?? assets.find((item) => item.id === instance.assetId);
+  const footprint = footprintFor(asset?.primitive);
+  return objectMetrics(instance.position, instance.rotation[1], instance.scale, footprint.width, footprint.depth);
+}
+
+function shapeHandleMetrics(id: string, shapes: CustomShape[]): BlueprintObjectMetrics | null {
+  const shape = shapes.find((item) => item.id === id);
+  if (!shape) return null;
+  return objectMetrics(shape.position, shape.rotation[1], shape.scale, 1, 1);
 }
 
 function BlueprintWallHandles({

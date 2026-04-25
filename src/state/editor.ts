@@ -99,7 +99,7 @@ export function applyRoomTemplate(current: EditorState, templateId: string): Edi
 export function createUploadedFurnitureAsset(file: File): FurnitureAsset {
   const name = file.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ").trim() || "Uploaded model";
   return {
-    id: crypto.randomUUID(),
+    id: createId(),
     prompt: `Uploaded model: ${file.name}`,
     name: titleCase(name),
     status: "ready",
@@ -168,7 +168,7 @@ export function wallSize(room: RoomBounds, wall: WallId): Vec3 {
 export function createFurnitureAsset(prompt: string): FurnitureAsset {
   const primitive = inferPrimitive(prompt);
   return {
-    id: crypto.randomUUID(),
+    id: createId(),
     prompt,
     name: titleCase(prompt),
     status: "queued",
@@ -183,7 +183,7 @@ export function buildFurnitureAssetMap(assets: FurnitureAsset[]): FurnitureAsset
 
 export function createFurnitureInstance(asset: FurnitureAsset, position: Vec3): FurnitureInstance {
   return {
-    id: crypto.randomUUID(),
+    id: createId(),
     assetId: asset.id,
     name: asset.name,
     position,
@@ -195,7 +195,7 @@ export function createFurnitureInstance(asset: FurnitureAsset, position: Vec3): 
 export function createCustomShape(kind: ShapeKind, position: Vec3): CustomShape {
   const groundedPosition: Vec3 = [position[0], kind === "plane" ? 0.03 : 0.5, position[2]];
   return {
-    id: crypto.randomUUID(),
+    id: createId(),
     name: titleCase(kind),
     kind,
     position: groundedPosition,
@@ -216,12 +216,20 @@ export function createSceneCamera(position: Vec3, room: RoomBounds): SceneCamera
   const yaw = Math.atan2(cameraPosition[0] - centerX, cameraPosition[2] - centerZ);
 
   return {
-    id: crypto.randomUUID(),
+    id: createId(),
     name: "Camera",
     position: cameraPosition,
     rotation: [0, yaw, 0],
     fov: 62,
   };
+}
+
+function createId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  return `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 export function round(value: number, decimals = 2) {
