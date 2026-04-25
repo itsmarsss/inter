@@ -14,8 +14,7 @@ import { BlueprintView } from "./components/BlueprintView";
 import type { ViewMode } from "./components/ModeBar";
 import {
   buildFurnitureAssetMap,
-  clampToRoom,
-  effectiveBoundsForRoom,
+  clampToFloor,
   createDefaultWallSegmentation,
   createDoor,
   createFurnitureAsset,
@@ -232,21 +231,18 @@ export default function App() {
   }, [state.marble.operationId, state.marble.status]);
 
   const setRoom: React.ComponentProps<typeof SceneView>["onRoomChange"] = (room) =>
-    setState((current) => {
-      const bounds = effectiveBoundsForRoom(room, current.wallSegments);
-      return {
-        ...current,
-        room,
-        furnitureInstances: current.furnitureInstances.map((instance) => ({
-          ...instance,
-          position: clampToRoom(instance.position, bounds),
-        })),
-        customShapes: current.customShapes.map((shape) => ({
-          ...shape,
-          position: clampToRoom(shape.position, bounds),
-        })),
-      };
-    });
+    setState((current) => ({
+      ...current,
+      room,
+      furnitureInstances: current.furnitureInstances.map((instance) => ({
+        ...instance,
+        position: clampToFloor(instance.position, room, current.wallSegments),
+      })),
+      customShapes: current.customShapes.map((shape) => ({
+        ...shape,
+        position: clampToFloor(shape.position, room, current.wallSegments),
+      })),
+    }));
   const setInstances: React.ComponentProps<typeof SceneView>["onInstancesChange"] = (furnitureInstances) =>
     setState((current) => ({ ...current, furnitureInstances }));
   const setShapes: React.ComponentProps<typeof SceneView>["onShapesChange"] = (customShapes) =>
@@ -259,17 +255,16 @@ export default function App() {
     setState((current) => ({ ...current, windows }));
   const setWallSegments: React.ComponentProps<typeof SceneView>["onWallSegmentsChange"] = (wallSegments) =>
     setState((current) => {
-      const bounds = effectiveBoundsForRoom(current.room, wallSegments);
       return {
         ...current,
         wallSegments,
         furnitureInstances: current.furnitureInstances.map((instance) => ({
           ...instance,
-          position: clampToRoom(instance.position, bounds),
+          position: clampToFloor(instance.position, current.room, wallSegments),
         })),
         customShapes: current.customShapes.map((shape) => ({
           ...shape,
-          position: clampToRoom(shape.position, bounds),
+          position: clampToFloor(shape.position, current.room, wallSegments),
         })),
       };
     });

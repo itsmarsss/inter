@@ -17,9 +17,9 @@ import type {
 } from "../state/types";
 import {
   buildFloorPolygon,
+  clampToFloor,
   clampToRoom,
   clampWallOffset,
-  effectiveBoundsForRoom,
   findSegmentAtFraction,
   offsetToFraction,
   resizeRoomFromWall,
@@ -257,8 +257,7 @@ export function BlueprintView({
     const point = pointFromPointer(event.clientX, event.clientY);
     if (!point) return;
 
-    const effectiveBounds = wallSegments ? effectiveBoundsForRoom(room, wallSegments) : room;
-    const next = transformObjectFromPointer(objectTransform, point.x, point.y, effectiveBounds);
+    const next = transformObjectFromPointer(objectTransform, point.x, point.y, room, wallSegments);
 
     if (objectTransform.target.type === "furniture") {
       onInstancesChange(
@@ -624,10 +623,11 @@ function transformObjectFromPointer(
   pointerX: number,
   pointerZ: number,
   room: RoomBounds,
+  wallSegments?: WallSegmentation,
 ) {
   if (session.mode === "move") {
     return {
-      position: clampToRoom([pointerX - session.grabOffsetX, session.y, pointerZ - session.grabOffsetZ], room),
+      position: clampToFloor([pointerX - session.grabOffsetX, session.y, pointerZ - session.grabOffsetZ], room, wallSegments),
       rotation: [0, session.startRotationY, 0] as Vec3,
       scale: session.startScale,
     };
