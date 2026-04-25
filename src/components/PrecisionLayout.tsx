@@ -26,6 +26,8 @@ type PrecisionLayoutProps = {
   marble: MarbleResult;
   onGenerateRoom: () => void;
   onCancelRun: () => void;
+  /** When true, sidebars animate in from their edges */
+  entering?: boolean;
 };
 
 export function PrecisionLayout({
@@ -42,7 +44,15 @@ export function PrecisionLayout({
   marble,
   onGenerateRoom,
   onCancelRun,
+  entering = false,
 }: PrecisionLayoutProps) {
+  // Build an animation shorthand string for the entrance animations.
+  // Each wrapper div uses `position:absolute; inset:0` so it's a full-screen
+  // positioned container — children's own `position:absolute` references
+  // this wrapper, which is the same effective rect as the parent.
+  const ease = "cubic-bezier(0.22, 1, 0.36, 1)";
+  const anim = (name: string, delay: number) =>
+    entering ? `${name} 0.55s ${ease} ${delay}ms both` : undefined;
   const [activeSection, setActiveSection] = useState<RailSection>("furniture");
   const [panelOpen, setPanelOpen] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>("Block");
@@ -71,41 +81,70 @@ export function PrecisionLayout({
       {/* Layer 0 — viewport fills entire screen */}
       <Viewport room={room}>{viewport}</Viewport>
 
-      {/* Layer 1 — icon rail */}
-      <IconRail
-        activeSection={activeSection}
-        panelOpen={panelOpen}
-        onSectionChange={handleSectionChange}
-      />
-
-      {/* Layer 1 — furniture panel (always mounted for smooth transition) */}
-      <FurniturePanel
-        open={panelOpen && activeSection === "furniture"}
-        assets={furnitureAssets}
-        onGenerate={onGenerateFurniture}
-        onClose={() => setPanelOpen(false)}
-      />
-
-      {/* Layer 2 — floating overlays */}
-      <ModeBar activeMode={viewMode} onModeChange={setViewMode} />
-      <MinimapPanel room={room} instances={furnitureInstances} />
-
-      {/* Generate panel (toggleable) */}
-      {generateOpen && (
-        <GeneratePanel
-          prompt={stylePrompt}
-          marble={marble}
-          onPromptChange={onStylePromptChange}
-          onGenerate={onGenerateRoom}
-          onCancelRun={onCancelRun}
+      {/* Layer 1 — icon rail (slides from left) */}
+      <div style={{ position: "absolute", inset: 0, animation: anim("ui-from-left", 0) }}>
+        <IconRail
+          activeSection={activeSection}
+          panelOpen={panelOpen}
+          onSectionChange={handleSectionChange}
         />
+      </div>
+
+      {/* Layer 1 — furniture panel (slides from left, slightly delayed) */}
+      <div style={{ position: "absolute", inset: 0, animation: anim("ui-from-left", 80) }}>
+        <FurniturePanel
+          open={panelOpen && activeSection === "furniture"}
+          assets={furnitureAssets}
+          onGenerate={onGenerateFurniture}
+          onClose={() => setPanelOpen(false)}
+        />
+      </div>
+
+      {/* Layer 2 — mode bar (slides from top) */}
+      <div style={{ position: "absolute", inset: 0, animation: anim("ui-from-top", 40), pointerEvents: "none" }}>
+        <div style={{ pointerEvents: "auto" }}>
+          <ModeBar activeMode={viewMode} onModeChange={setViewMode} />
+        </div>
+      </div>
+
+      {/* Minimap (slides from right) */}
+      <div style={{ position: "absolute", inset: 0, animation: anim("ui-from-right", 80), pointerEvents: "none" }}>
+        <div style={{ pointerEvents: "auto" }}>
+          <MinimapPanel room={room} instances={furnitureInstances} />
+        </div>
+      </div>
+
+      {/* Generate panel (slides from bottom) */}
+      {generateOpen && (
+        <div style={{ position: "absolute", inset: 0, animation: anim("ui-from-bottom", 120), pointerEvents: "none" }}>
+          <div style={{ pointerEvents: "auto" }}>
+            <GeneratePanel
+              prompt={stylePrompt}
+              marble={marble}
+              onPromptChange={onStylePromptChange}
+              onGenerate={onGenerateRoom}
+              onCancelRun={onCancelRun}
+            />
+          </div>
+        </div>
       )}
 
-      <BottomToolbar
-        panelOpen={generateOpen}
-        onTogglePanel={() => setGenerateOpen((o) => !o)}
-      />
-      <RefToggle opacity={panoramaOpacity} onChange={onPanoramaOpacityChange} />
+      {/* Bottom toolbar (slides from bottom) */}
+      <div style={{ position: "absolute", inset: 0, animation: anim("ui-from-bottom", 100), pointerEvents: "none" }}>
+        <div style={{ pointerEvents: "auto" }}>
+          <BottomToolbar
+            panelOpen={generateOpen}
+            onTogglePanel={() => setGenerateOpen((o) => !o)}
+          />
+        </div>
+      </div>
+
+      {/* Ref toggle (fades in) */}
+      <div style={{ position: "absolute", inset: 0, animation: anim("ui-fade-in", 160), pointerEvents: "none" }}>
+        <div style={{ pointerEvents: "auto" }}>
+          <RefToggle opacity={panoramaOpacity} onChange={onPanoramaOpacityChange} />
+        </div>
+      </div>
 
       {/* Version badge */}
       <div

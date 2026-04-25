@@ -1,98 +1,99 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import EditorApp from "../src/App";
 import LandingPage from "../src/components/LandingPage";
 
-type Phase = "landing" | "zooming" | "editor";
+/*
+ * Phases:
+ *  landing   — landing page visible, editor pre-mounted but invisible
+ *  tilting   — grid rotates + zooms into floor perspective (~1400ms)
+ *  revealing — tilt done; editor fades in, landing page fades out (500ms)
+ *  entering  — editor visible; sidebars animate in (550ms)
+ *  editor    — everything visible and interactive; landing unmounted
+ */
+type Phase = "landing" | "tilting" | "revealing" | "entering" | "editor";
 
 export default function HomePage() {
   const [phase, setPhase] = useState<Phase>("landing");
-  const [editorMounted, setEditorMounted] = useState(false);
+  const triggered = useRef(false);
 
-  // Mount the editor early so it's ready behind the landing page
+  const handleEnter = useCallback(() => {
+    if (triggered.current) return;
+    triggered.current = true;
+
+    // Start the grid tilt
+    setPhase("tilting");
+
+    // After tilt (1400ms) + small buffer: crossfade to editor
+    setTimeout(() => setPhase("revealing"), 1450);
+
+    // After crossfade (500ms): trigger sidebar slide-in
+    setTimeout(() => setPhase("entering"), 1950);
+
+    // After sidebars done (550ms): fully active
+    setTimeout(() => setPhase("editor"), 2600);
+  }, []);
+
+  // Mount editor early so Three.js / shaders are compiled during landing
+  const [editorMounted, setEditorMounted] = useState(false);
   useEffect(() => {
-    const t = setTimeout(() => setEditorMounted(true), 200);
+    const t = setTimeout(() => setEditorMounted(true), 400);
     return () => clearTimeout(t);
   }, []);
 
-  // Keyboard shortcut: Enter to launch
-  useEffect(() => {
-    if (phase !== "landing") return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Enter") handleEnter();
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase]);
-
-  const handleEnter = useCallback(() => {
-    if (phase !== "landing") return;
-    // Phase 1: landing page fades out (handled inside LandingPage)
-    // Phase 2: after 700ms, start zoom-in of editor
-    setPhase("zooming");
-    setTimeout(() => setPhase("editor"), 1200);
-  }, [phase]);
+  // Keep landing mounted through "revealing" so its fade-out transition can play
+  const showLanding = phase === "landing" || phase === "tilting" || phase === "revealing";
+  const landingOpacity = phase === "revealing" ? 0 : 1;
+  const editorOpacity = phase === "landing" || phase === "tilting" ? 0 : 1;
+  const isEntering = phase === "entering";
 
   return (
-    <div style={{ position: "relative", width: "100vw", height: "100vh", overflow: "hidden", background: "#0a0a0f" }}>
-      {/* Editor — mounted behind the landing page, zooms in on transition */}
+    <div
+      style={{
+        position: "relative",
+        width: "100vw",
+        height: "100vh",
+        overflow: "hidden",
+        background: "#090a0c",
+      }}
+    >
+      {/* ── Editor ─────────────────────────────────────────────────────────── */}
       {editorMounted && (
         <div
           style={{
             position: "absolute",
             inset: 0,
-            transition:
-              phase === "zooming"
-                ? "opacity 0.9s ease 0.1s, transform 0.9s cubic-bezier(0.22, 1, 0.36, 1) 0.1s"
-                : "none",
-            opacity: phase === "landing" ? 0 : 1,
-            transform:
-              phase === "landing"
-                ? "scale(1.12)"
-                : phase === "zooming"
-                  ? "scale(1)"
-                  : "scale(1)",
+            // Fade in when revealing; no transition while landing (stays hidden)
+            transition: phase === "revealing" ? "opacity 0.5s ease" : "none",
+            opacity: editorOpacity,
             pointerEvents: phase === "editor" ? "auto" : "none",
           }}
         >
-          <EditorApp />
+          <EditorApp entering={isEntering} />
         </div>
       )}
 
-      {/* Sidebar slide-in overlay — appears after zoom */}
-      {phase !== "landing" && (
+      {/* ── Landing page (tilt + zoom) ──────────────────────────────────────── */}
+      {showLanding && (
         <div
           style={{
             position: "absolute",
             inset: 0,
-            pointerEvents: "none",
             zIndex: 10,
+            // Fade out simultaneously with editor fade-in
+            transition: phase === "revealing" ? "opacity 0.5s ease" : "none",
+            opacity: landingOpacity,
+            pointerEvents: phase === "tilting" ? "none" : "auto",
           }}
-        />
+        >
+          {/* isTilting stays true through "revealing" so grid remains at floor angle while fading */}
+          <LandingPage
+            isTilting={phase === "tilting" || phase === "revealing"}
+            onEnter={handleEnter}
+          />
+        </div>
       )}
-
-      {/* Landing page — sits on top, fades out on enter */}
-      {phase === "landing" && <LandingPage onEnter={handleEnter} />}
-
-      {/* Transition flash — brief white flash bridges the two phases */}
-      <div
-        style={{
-          position: "fixed",
-          inset: 0,
-          background: "#0a0a0f",
-          zIndex: 99,
-          pointerEvents: "none",
-          transition:
-            phase === "zooming"
-              ? "opacity 0.5s ease 0s"
-              : phase === "editor"
-                ? "opacity 0.4s ease 0s"
-                : "none",
-          opacity: phase === "zooming" ? 0.6 : 0,
-        }}
-      />
     </div>
   );
 }
