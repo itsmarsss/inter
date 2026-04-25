@@ -3,11 +3,13 @@ export type ToolMode =
   | "move"
   | "rotate"
   | "scale"
-  | "extrude"
+  | "cut-wall"
   | "add-wall"
   | "add-furniture"
   | "add-shape"
-  | "add-camera";
+  | "add-camera"
+  | "add-door"
+  | "add-window";
 
 export type WorkflowStepId = "chisel" | "panorama" | "draft" | "world";
 
@@ -85,11 +87,42 @@ export type SceneCamera = {
   fov: number;
 };
 
+export type Door = {
+  id: string;
+  name: string;
+  wall: WallId;
+  offset: number;
+  width: number;
+  height: number;
+};
+
+export type WindowOpening = {
+  id: string;
+  name: string;
+  wall: WallId;
+  offset: number;
+  baseY: number;
+  width: number;
+  height: number;
+};
+
+export type WallSegment = {
+  id: string;
+  start: number;
+  end: number;
+  displacement: number;
+};
+
+export type WallSegmentation = Record<WallId, WallSegment[]>;
+
 export type SelectedRef =
   | { type: "wall"; id: WallId }
   | { type: "furniture"; id: string }
   | { type: "shape"; id: string }
   | { type: "camera"; id: string }
+  | { type: "door"; id: string }
+  | { type: "window"; id: string }
+  | { type: "wall-segment"; wall: WallId; id: string }
   | null;
 
 export type MarblePayload = {
@@ -175,6 +208,9 @@ export type EditorState = {
   furnitureInstances: FurnitureInstance[];
   customShapes: CustomShape[];
   cameras: SceneCamera[];
+  doors: Door[];
+  windows: WindowOpening[];
+  wallSegments: WallSegmentation;
   activeShapeKind: ShapeKind;
   stylePrompt: string;
   marble: MarbleResult;

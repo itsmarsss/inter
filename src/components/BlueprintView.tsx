@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import type {
   CustomShape,
+  Door,
   FurnitureAsset,
   FurnitureAssetMap,
   FurnitureInstance,
@@ -10,8 +11,19 @@ import type {
   ToolMode,
   Vec3,
   WallId,
+  WallSegment,
+  WallSegmentation,
+  WindowOpening,
 } from "../state/types";
-import { clampToRoom, resizeRoomFromWall, roomDimensions } from "../state/editor";
+import {
+  buildFloorPolygon,
+  clampToRoom,
+  clampWallOffset,
+  findSegmentAtFraction,
+  offsetToFraction,
+  resizeRoomFromWall,
+  roomDimensions,
+} from "../state/editor";
 
 type BlueprintViewProps = {
   room: RoomBounds;
@@ -19,13 +31,27 @@ type BlueprintViewProps = {
   assetById?: FurnitureAssetMap;
   instances: FurnitureInstance[];
   shapes: CustomShape[];
+  doors?: Door[];
+  windows?: WindowOpening[];
+  wallSegments?: WallSegmentation;
   selected: SelectedRef;
   tool: ToolMode;
   onSelect: (selected: SelectedRef) => void;
   onRoomChange: (room: RoomBounds) => void;
   onInstancesChange: (instances: FurnitureInstance[]) => void;
   onShapesChange: (shapes: CustomShape[]) => void;
+  onDoorsChange?: (doors: Door[]) => void;
+  onWindowsChange?: (windows: WindowOpening[]) => void;
   registerBlueprintCapture: (capture: () => string | undefined) => void;
+};
+
+type OpeningDragSession = {
+  kind: "door" | "window";
+  id: string;
+  wall: WallId;
+  startOffset: number;
+  grabOffset: number;
+  width: number;
 };
 
 type BlueprintObjectTransform = {
@@ -56,17 +82,23 @@ export function BlueprintView({
   assetById,
   instances,
   shapes,
+  doors = [],
+  windows = [],
+  wallSegments,
   selected,
   tool,
   onSelect,
   onRoomChange,
   onInstancesChange,
   onShapesChange,
+  onDoorsChange,
+  onWindowsChange,
   registerBlueprintCapture,
 }: BlueprintViewProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [draggingWall, setDraggingWall] = useState<WallId | null>(null);
   const [objectTransform, setObjectTransform] = useState<BlueprintObjectTransform | null>(null);
+  const [openingDrag, setOpeningDrag] = useState<OpeningDragSession | null>(null);
   const view = useMemo(() => {
     const padding = 1.2;
     return {
@@ -77,6 +109,18 @@ export function BlueprintView({
     };
   }, [room]);
   const dimensions = roomDimensions(room);
+  const floorPolygonPoints = useMemo(() => {
+    const segmentation =
+      wallSegments ?? {
+        north: [{ id: "north-default", start: 0, end: 1, displacement: 0 }],
+        south: [{ id: "south-default", start: 0, end: 1, displacement: 0 }],
+        east: [{ id: "east-default", start: 0, end: 1, displacement: 0 }],
+        west: [{ id: "west-default", start: 0, end: 1, displacement: 0 }],
+      };
+    const polygon = buildFloorPolygon(room, segmentation);
+    if (polygon.length < 3) return null;
+    return polygon.map((point) => `${point.x},${point.z}`).join(" ");
+  }, [room, wallSegments]);
 
   useEffect(() => {
     registerBlueprintCapture(() => {
@@ -239,9 +283,83 @@ export function BlueprintView({
     setObjectTransform(null);
   }
 
+  function beginOpeningDrag(
+    kind: "door" | "window",
+    target: Door | WindowOpening,
+    event: ReactPointerEvent<SVGElement>,
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    onSelect({ type: kind, id: target.id });
+    if (tool !== "select" && tool !== "move") return;
+
+    const point = pointFromPointer(event.clientX, event.clientY);
+    if (!point) return;
+
+    const cx = (room.minX + room.maxX) / 2;
+    const cz = (room.minZ + room.maxZ) / 2;
+    const pointerAlong =
+      target.wall === "north" || target.wall === "south" ? point.x - cx : point.y - cz;
+
+    setOpeningDrag({
+      kind,
+      id: target.id,
+      wall: target.wall,
+      startOffset: target.offset,
+      grabOffset: pointerAlong - target.offset,
+      width: target.width,
+    });
+    svgRef.current?.setPointerCapture(event.pointerId);
+  }
+
+  function updateOpeningDrag(event: ReactPointerEvent<SVGSVGElement>) {
+    if (!openingDrag) return;
+    const point = pointFromPointer(event.clientX, event.clientY);
+    if (!point) return;
+
+    const cx = (room.minX + room.maxX) / 2;
+    const cz = (room.minZ + room.maxZ) / 2;
+    const pointerAlong =
+      openingDrag.wall === "north" || openingDrag.wall === "south" ? point.x - cx : point.y - cz;
+    const nextOffset = clampWallOffset(
+      room,
+      openingDrag.wall,
+      pointerAlong - openingDrag.grabOffset,
+      openingDrag.width,
+    );
+
+    if (openingDrag.kind === "door" && onDoorsChange) {
+      onDoorsChange(
+        doors.map((door) => (door.id === openingDrag.id ? { ...door, offset: nextOffset } : door)),
+      );
+    } else if (openingDrag.kind === "window" && onWindowsChange) {
+      onWindowsChange(
+        windows.map((win) =>
+          win.id === openingDrag.id ? { ...win, offset: nextOffset } : win,
+        ),
+      );
+    }
+  }
+
+  function endOpeningDrag(event: ReactPointerEvent<SVGSVGElement>) {
+    if (!openingDrag) return;
+    try {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    } catch {
+      // already released
+    }
+    setOpeningDrag(null);
+  }
+
   function handlePointerMove(event: ReactPointerEvent<SVGSVGElement>) {
     if (draggingWall) {
       updateWallDrag(event);
+      return;
+    }
+    if (openingDrag) {
+      updateOpeningDrag(event);
       return;
     }
 
@@ -251,6 +369,7 @@ export function BlueprintView({
   function handlePointerEnd(event: ReactPointerEvent<SVGSVGElement>) {
     endWallDrag(event);
     endObjectDrag(event);
+    endOpeningDrag(event);
   }
 
   return (
@@ -272,15 +391,25 @@ export function BlueprintView({
           </pattern>
         </defs>
         <rect x={view.x} y={view.y} width={view.width} height={view.height} fill="url(#bp-grid)" />
-        <rect
-          x={room.minX}
-          y={room.minZ}
-          width={room.maxX - room.minX}
-          height={room.maxZ - room.minZ}
-          fill="#FFF9EE"
-          stroke="#14232B"
-          strokeWidth="0.18"
-        />
+        {floorPolygonPoints ? (
+          <polygon
+            points={floorPolygonPoints}
+            fill="#FFF9EE"
+            stroke="#14232B"
+            strokeWidth="0.18"
+            strokeLinejoin="miter"
+          />
+        ) : (
+          <rect
+            x={room.minX}
+            y={room.minZ}
+            width={room.maxX - room.minX}
+            height={room.maxZ - room.minZ}
+            fill="#FFF9EE"
+            stroke="#14232B"
+            strokeWidth="0.18"
+          />
+        )}
         <BlueprintWallHandles
           room={room}
           selected={selected}
@@ -315,20 +444,86 @@ export function BlueprintView({
         >
           {dimensions.depth}m
         </text>
-        <path
-          d={`M ${room.minX + 0.65} ${room.minZ} Q ${room.minX + 1.15} ${room.minZ + 0.15} ${room.minX + 1.35} ${room.minZ + 0.65}`}
-          fill="none"
-          stroke="#BC3E35"
-          strokeWidth="0.055"
+        <BlueprintWallSegments
+          room={room}
+          wallSegments={wallSegments}
+          selected={selected}
+          onSelect={onSelect}
         />
-        <line
-          x1={room.minX + 0.65}
-          y1={room.minZ}
-          x2={room.minX + 1.35}
-          y2={room.minZ}
-          stroke="#FFF9EE"
-          strokeWidth="0.22"
-        />
+        {doors.map((door) => {
+          const isSelected = selected?.type === "door" && selected.id === door.id;
+          const seg = openingSegment(door, room, wallSegments?.[door.wall]);
+          const arc = doorArcPath(door, room, seg);
+          return (
+            <g key={door.id}>
+              <line
+                x1={seg.x1}
+                y1={seg.y1}
+                x2={seg.x2}
+                y2={seg.y2}
+                stroke="#FFF9EE"
+                strokeWidth="0.22"
+                strokeLinecap="butt"
+              />
+              <line
+                x1={seg.x1}
+                y1={seg.y1}
+                x2={seg.x2}
+                y2={seg.y2}
+                stroke={isSelected ? "#3BA7FF" : "#9C7A52"}
+                strokeWidth="0.08"
+                strokeLinecap="butt"
+                onPointerDown={(event) => beginOpeningDrag("door", door, event)}
+                style={{ cursor: "grab" }}
+              />
+              <path
+                d={arc}
+                fill="none"
+                stroke={isSelected ? "#3BA7FF" : "#BC3E35"}
+                strokeWidth="0.045"
+                pointerEvents="none"
+              />
+            </g>
+          );
+        })}
+        {windows.map((win) => {
+          const isSelected = selected?.type === "window" && selected.id === win.id;
+          const seg = openingSegment(win, room, wallSegments?.[win.wall]);
+          return (
+            <g key={win.id}>
+              <line
+                x1={seg.x1}
+                y1={seg.y1}
+                x2={seg.x2}
+                y2={seg.y2}
+                stroke="#FFF9EE"
+                strokeWidth="0.22"
+                strokeLinecap="butt"
+              />
+              <line
+                x1={seg.x1}
+                y1={seg.y1}
+                x2={seg.x2}
+                y2={seg.y2}
+                stroke={isSelected ? "#3BA7FF" : "#7DB7D9"}
+                strokeWidth="0.1"
+                strokeLinecap="butt"
+                onPointerDown={(event) => beginOpeningDrag("window", win, event)}
+                style={{ cursor: "grab" }}
+              />
+              <line
+                x1={seg.x1}
+                y1={seg.y1}
+                x2={seg.x2}
+                y2={seg.y2}
+                stroke={isSelected ? "#3BA7FF" : "#2A2F36"}
+                strokeWidth="0.025"
+                strokeDasharray="0.08 0.06"
+                pointerEvents="none"
+              />
+            </g>
+          );
+        })}
         {instances.map((instance) => {
           const asset = assetById?.get(instance.assetId) ?? assets.find((item) => item.id === instance.assetId);
           const footprint = footprintFor(asset?.primitive);
@@ -728,4 +923,260 @@ function footprintFor(primitive?: FurnitureAsset["primitive"]) {
   if (primitive === "lamp" || primitive === "plant") return { width: 0.55, depth: 0.55 };
   if (primitive === "cabinet") return { width: 1.35, depth: 0.5 };
   return { width: 1.65, depth: 0.9 };
+}
+
+function openingSegment(
+  opening: Door | WindowOpening,
+  room: RoomBounds,
+  segments?: WallSegment[],
+) {
+  const cx = (room.minX + room.maxX) / 2;
+  const cz = (room.minZ + room.maxZ) / 2;
+  const half = opening.width / 2;
+  const { dx, dz } = applySegmentationToOpening(room, opening.wall, opening.offset, segments);
+  if (opening.wall === "north" || opening.wall === "south") {
+    const z = (opening.wall === "north" ? room.maxZ : room.minZ) + dz;
+    return { x1: cx + opening.offset - half, y1: z, x2: cx + opening.offset + half, y2: z };
+  }
+  const x = (opening.wall === "east" ? room.maxX : room.minX) + dx;
+  return { x1: x, y1: cz + opening.offset - half, x2: x, y2: cz + opening.offset + half };
+}
+
+function doorArcPath(door: Door, room: RoomBounds, seg: { x1: number; y1: number; x2: number; y2: number }) {
+  const radius = door.width;
+  let normalX = 0;
+  let normalY = 0;
+  if (door.wall === "north") normalY = -1;
+  else if (door.wall === "south") normalY = 1;
+  else if (door.wall === "east") normalX = -1;
+  else normalX = 1;
+  const hingeX = seg.x1;
+  const hingeY = seg.y1;
+  const arcEndX = hingeX + normalX * radius;
+  const arcEndY = hingeY + normalY * radius;
+  void room;
+  const sweep = 1;
+  return `M ${hingeX} ${hingeY} L ${seg.x2} ${seg.y2} M ${seg.x2} ${seg.y2} A ${radius} ${radius} 0 0 ${sweep} ${arcEndX} ${arcEndY}`;
+}
+
+function wallSurfaceSign(wall: WallId): number {
+  if (wall === "north" || wall === "east") return -1;
+  return 1;
+}
+
+function segmentLineCoords(
+  wall: WallId,
+  segment: WallSegment,
+  room: RoomBounds,
+): { x1: number; y1: number; x2: number; y2: number } {
+  const sign = wallSurfaceSign(wall);
+  if (wall === "north") {
+    const baseZ = room.maxZ + sign * segment.displacement;
+    return {
+      x1: room.minX + segment.start * (room.maxX - room.minX),
+      y1: baseZ,
+      x2: room.minX + segment.end * (room.maxX - room.minX),
+      y2: baseZ,
+    };
+  }
+  if (wall === "south") {
+    const baseZ = room.minZ + sign * segment.displacement;
+    return {
+      x1: room.minX + segment.start * (room.maxX - room.minX),
+      y1: baseZ,
+      x2: room.minX + segment.end * (room.maxX - room.minX),
+      y2: baseZ,
+    };
+  }
+  if (wall === "east") {
+    const baseX = room.maxX + sign * segment.displacement;
+    return {
+      x1: baseX,
+      y1: room.minZ + segment.start * (room.maxZ - room.minZ),
+      x2: baseX,
+      y2: room.minZ + segment.end * (room.maxZ - room.minZ),
+    };
+  }
+  const baseX = room.minX + sign * segment.displacement;
+  return {
+    x1: baseX,
+    y1: room.minZ + segment.start * (room.maxZ - room.minZ),
+    x2: baseX,
+    y2: room.minZ + segment.end * (room.maxZ - room.minZ),
+  };
+}
+
+function connectorLineCoords(
+  wall: WallId,
+  current: WallSegment,
+  next: WallSegment,
+  room: RoomBounds,
+): { x1: number; y1: number; x2: number; y2: number } {
+  const sign = wallSurfaceSign(wall);
+  if (wall === "north" || wall === "south") {
+    const x = room.minX + current.end * (room.maxX - room.minX);
+    const baseZ = wall === "north" ? room.maxZ : room.minZ;
+    return {
+      x1: x,
+      y1: baseZ + sign * current.displacement,
+      x2: x,
+      y2: baseZ + sign * next.displacement,
+    };
+  }
+  const y = room.minZ + current.end * (room.maxZ - room.minZ);
+  const baseX = wall === "east" ? room.maxX : room.minX;
+  return {
+    x1: baseX + sign * current.displacement,
+    y1: y,
+    x2: baseX + sign * next.displacement,
+    y2: y,
+  };
+}
+
+function BlueprintWallSegments({
+  room,
+  wallSegments,
+  selected,
+  onSelect,
+}: {
+  room: RoomBounds;
+  wallSegments?: WallSegmentation;
+  selected: SelectedRef;
+  onSelect: (selected: SelectedRef) => void;
+}) {
+  if (!wallSegments) return null;
+  return (
+    <g>
+      {(["north", "south", "east", "west"] as WallId[]).map((wall) => {
+        const segments = wallSegments[wall];
+        if (!segments || segments.length <= 1) return null;
+        return (
+          <g key={wall}>
+            {segments.map((segment) => {
+              const isSelected = selected?.type === "wall-segment" && selected.id === segment.id;
+              const coords = segmentLineCoords(wall, segment, room);
+              return (
+                <line
+                  key={segment.id}
+                  x1={coords.x1}
+                  y1={coords.y1}
+                  x2={coords.x2}
+                  y2={coords.y2}
+                  stroke={isSelected ? "#3BA7FF" : "#14232B"}
+                  strokeWidth="0.18"
+                  strokeLinecap="butt"
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onSelect({ type: "wall-segment", wall, id: segment.id });
+                  }}
+                  style={{ cursor: "pointer" }}
+                />
+              );
+            })}
+            {segments.slice(0, -1).map((segment, index) => {
+              const next = segments[index + 1];
+              if (Math.abs(next.displacement - segment.displacement) < 0.001) return null;
+              const coords = connectorLineCoords(wall, segment, next, room);
+              return (
+                <line
+                  key={`${segment.id}-${next.id}-connector`}
+                  x1={coords.x1}
+                  y1={coords.y1}
+                  x2={coords.x2}
+                  y2={coords.y2}
+                  stroke="#14232B"
+                  strokeWidth="0.14"
+                  strokeLinecap="butt"
+                />
+              );
+            })}
+            {(() => {
+              const first = segments[0];
+              if (!first || Math.abs(first.displacement) < 0.001) return null;
+              const coords = endConnectorLineCoords(wall, first, "start", room);
+              return (
+                <line
+                  key={`${wall}-start-connector`}
+                  x1={coords.x1}
+                  y1={coords.y1}
+                  x2={coords.x2}
+                  y2={coords.y2}
+                  stroke="#14232B"
+                  strokeWidth="0.14"
+                  strokeLinecap="butt"
+                />
+              );
+            })()}
+            {(() => {
+              const last = segments[segments.length - 1];
+              if (!last || Math.abs(last.displacement) < 0.001) return null;
+              const coords = endConnectorLineCoords(wall, last, "end", room);
+              return (
+                <line
+                  key={`${wall}-end-connector`}
+                  x1={coords.x1}
+                  y1={coords.y1}
+                  x2={coords.x2}
+                  y2={coords.y2}
+                  stroke="#14232B"
+                  strokeWidth="0.14"
+                  strokeLinecap="butt"
+                />
+              );
+            })()}
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
+function endConnectorLineCoords(
+  wall: WallId,
+  segment: WallSegment,
+  end: "start" | "end",
+  room: RoomBounds,
+): { x1: number; y1: number; x2: number; y2: number } {
+  const sign = wallSurfaceSign(wall);
+  if (wall === "north" || wall === "south") {
+    const x =
+      end === "start"
+        ? room.minX + segment.start * (room.maxX - room.minX)
+        : room.minX + segment.end * (room.maxX - room.minX);
+    const baseZ = wall === "north" ? room.maxZ : room.minZ;
+    return {
+      x1: x,
+      y1: baseZ,
+      x2: x,
+      y2: baseZ + sign * segment.displacement,
+    };
+  }
+  const y =
+    end === "start"
+      ? room.minZ + segment.start * (room.maxZ - room.minZ)
+      : room.minZ + segment.end * (room.maxZ - room.minZ);
+  const baseX = wall === "east" ? room.maxX : room.minX;
+  return {
+    x1: baseX,
+    y1: y,
+    x2: baseX + sign * segment.displacement,
+    y2: y,
+  };
+}
+
+function applySegmentationToOpening(
+  room: RoomBounds,
+  wall: WallId,
+  offset: number,
+  segments: WallSegment[] | undefined,
+): { dx: number; dz: number } {
+  if (!segments || segments.length === 0) return { dx: 0, dz: 0 };
+  const fraction = offsetToFraction(room, wall, offset);
+  const segment = findSegmentAtFraction(segments, fraction);
+  const sign = wallSurfaceSign(wall);
+  if (wall === "north" || wall === "south") {
+    return { dx: 0, dz: sign * segment.displacement };
+  }
+  return { dx: sign * segment.displacement, dz: 0 };
 }

@@ -6,18 +6,29 @@ import { Component, Suspense, useCallback, useEffect, useMemo, useRef, useState,
 import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl, PointerLockControls as PointerLockControlsImpl } from "three-stdlib";
 import {
+  buildFloorPolygon,
   clampToRoom,
+  clampWallOffset,
+  clampWindowVerticalOffset,
   createCustomShape,
+  createDoor,
   createFurnitureInstance,
   createSceneCamera,
+  createWindowOpening,
+  cutWallAt,
+  findSegmentAtFraction,
+  isSegmentationDefault,
+  offsetToFraction,
   resizeRoomFromWall,
   roomDimensions,
   setRoomDimensionFromWall,
+  setSegmentDisplacement,
+  wallAxisLength,
   wallPosition,
-  wallSize,
 } from "../state/editor";
 import type {
   CustomShape,
+  Door,
   FurnitureAsset,
   FurnitureAssetMap,
   FurnitureInstance,
@@ -30,6 +41,9 @@ import type {
   ToolMode,
   Vec3,
   WallId,
+  WallSegment,
+  WallSegmentation,
+  WindowOpening,
 } from "../state/types";
 import { cn } from "../lib/cn";
 
@@ -40,16 +54,23 @@ type SceneViewProps = {
   instances: FurnitureInstance[];
   shapes: CustomShape[];
   cameras: SceneCamera[];
+  doors: Door[];
+  windows: WindowOpening[];
+  wallSegments: WallSegmentation;
   activeShapeKind: ShapeKind;
   selected: SelectedRef;
   hovered: SelectedRef;
   tool: ToolMode;
   marble: MarbleResult;
   panoramaOpacity?: number;
+  displayMode: "Block" | "Splat";
   onRoomChange: (room: RoomBounds) => void;
   onInstancesChange: (instances: FurnitureInstance[]) => void;
   onShapesChange: (shapes: CustomShape[]) => void;
   onCamerasChange: (cameras: SceneCamera[]) => void;
+  onDoorsChange: (doors: Door[]) => void;
+  onWindowsChange: (windows: WindowOpening[]) => void;
+  onWallSegmentsChange: (segmentation: WallSegmentation) => void;
   onSelect: (selected: SelectedRef) => void;
   onToolChange: (tool: ToolMode) => void;
   registerSceneCapture: (capture: () => CaptureImage | undefined) => void;
@@ -57,7 +78,6 @@ type SceneViewProps = {
 
 type Projector = (clientX: number, clientY: number) => Vec3 | null;
 type ViewMode = "blockout" | "generated";
-type ComparisonMode = "blockout" | "blend" | "splat";
 type ObjectSplatMode = "off" | "highlight" | "fade" | "hide" | "isolate";
 type SplatLoadState = { status: "idle" | "loading" | "ready" | "error"; message?: string };
 type SplatAlignment = {
@@ -134,6 +154,39 @@ type ShapeRotateSession = {
   previousControlsEnabled: boolean;
 };
 
+type OpeningKind = "door" | "window";
+
+type OpeningDragSession = {
+  kind: OpeningKind;
+  id: string;
+  pointerId: number;
+  wall: WallId;
+  startOffset: number;
+  startBaseY: number;
+  grabOffsetAlong: number;
+  grabOffsetVertical: number;
+  latestClientX: number;
+  latestClientY: number;
+  rafId: number | null;
+  previousControlsEnabled: boolean;
+};
+
+type SegmentDisplacementSession = {
+  segmentId: string;
+  pointerId: number;
+  wall: WallId;
+  startDisplacement: number;
+  startClientX: number;
+  startClientY: number;
+  screenAxisX: number;
+  screenAxisY: number;
+  screenAxisLengthSq: number;
+  latestClientX: number;
+  latestClientY: number;
+  rafId: number | null;
+  previousControlsEnabled: boolean;
+};
+
 const SCENE_COLORS = {
   background: "#080B10",
   floor: "#111821",
@@ -155,6 +208,11 @@ const SCENE_COLORS = {
   clayDark: "#46505C",
   leaf: "#6E9F80",
   shapeWire: "#F4EEE6",
+  doorPanel: "#9C7A52",
+  doorFrame: "#3B2D20",
+  windowFrame: "#2A2F36",
+  windowGlass: "#7DB7D9",
+  extrusion: "#8C7B6B",
 } as const;
 
 const EDITING_MOUSE_BUTTONS: OrbitControlsImpl["mouseButtons"] = {
@@ -180,7 +238,6 @@ const DEFAULT_SPLAT_ALIGNMENT: SplatAlignment = {
   rotationY: 0,
   scale: 1,
 };
-const DEFAULT_COMPARISON_VALUE = 72;
 const INITIAL_CAMERA_POSITION: Vec3 = [6.5, 5.2, 7];
 const WALK_SPEED = 2.4;
 const WALK_FAST_MULTIPLIER = 1.8;
@@ -285,9 +342,6 @@ function selectedRefMatches(left: NonNullable<SelectedRef>, right: SelectedRef) 
 export function SceneView(props: SceneViewProps) {
   const projectorRef = useRef<Projector | null>(null);
   const firstPersonLockRef = useRef<() => void>(() => undefined);
-  const [comparisonMode, setComparisonMode] = useState<ComparisonMode>("blockout");
-  const [comparisonValue, setComparisonValue] = useState(0);
-  const [comparisonSpzUrl, setComparisonSpzUrl] = useState<string | undefined>();
   const [objectSplatMode, setObjectSplatMode] = useState<ObjectSplatMode>("off");
   const [splatLoadState, setSplatLoadState] = useState<SplatLoadState>({ status: "idle" });
   const [splatAlignmentState, setSplatAlignmentState] = useState<{
@@ -305,20 +359,12 @@ export function SceneView(props: SceneViewProps) {
     },
     [props.marble.spzUrl],
   );
-  const activeComparisonMode = generatedAvailable
-    ? comparisonSpzUrl === props.marble.spzUrl
-      ? comparisonMode
-      : "blend"
-    : "blockout";
-  const activeComparisonValue = generatedAvailable
-    ? comparisonSpzUrl === props.marble.spzUrl
-      ? comparisonValue
-      : Math.round((props.panoramaOpacity ?? DEFAULT_COMPARISON_VALUE / 100) * 100)
-    : 0;
-  const activeViewMode: ViewMode = generatedAvailable && activeComparisonMode !== "blockout" ? "generated" : "blockout";
-  const blockoutOpacity = generatedAvailable ? (100 - activeComparisonValue) / 100 : 1;
-  const splatOpacity = generatedAvailable ? activeComparisonValue / 100 : 0;
-  const firstPersonEnabled = firstPersonActive && activeViewMode === "generated" && splatLoadState.status !== "error";
+  const wantsSplat = props.displayMode === "Splat" && generatedAvailable;
+  const activeViewMode: ViewMode = wantsSplat ? "generated" : "blockout";
+  const blockoutOpacity = wantsSplat ? 0 : 1;
+  const splatOpacity = wantsSplat ? 1 : 0;
+  const firstPersonEnabled = firstPersonActive && wantsSplat && splatLoadState.status !== "error";
+
   const selectedCamera =
     props.selected?.type === "camera" ? props.cameras.find((camera) => camera.id === props.selected?.id) : undefined;
   const splatObjectRegions = useMemo(
@@ -330,23 +376,8 @@ export function SceneView(props: SceneViewProps) {
     : undefined;
   const objectSplatControlsVisible = generatedAvailable && splatOpacity > 0 && Boolean(selectedSplatRegion);
 
-  function selectComparisonMode(nextMode: ComparisonMode) {
-    if (!generatedAvailable && nextMode !== "blockout") return;
-    setComparisonMode(nextMode);
-    setComparisonSpzUrl(props.marble.spzUrl);
-    if (nextMode === "blockout") {
-      setComparisonValue(0);
-      setFirstPersonActive(false);
-    }
-    if (nextMode === "blend") setComparisonValue((current) => (current > 0 && current < 100 ? current : 50));
-    if (nextMode === "splat") setComparisonValue(100);
-  }
-
   function enterFirstPerson() {
-    if (!generatedAvailable) return;
-    setComparisonMode("splat");
-    setComparisonValue(100);
-    setComparisonSpzUrl(props.marble.spzUrl);
+    if (!wantsSplat) return;
     setFirstPersonActive(true);
     firstPersonLockRef.current();
   }
@@ -403,75 +434,50 @@ export function SceneView(props: SceneViewProps) {
           setProjector={(projector) => (projectorRef.current = projector)}
         />
       </Canvas>
-      <div className="absolute left-1/2 top-3 flex min-w-0 max-w-[calc(100vw-1.5rem)] -translate-x-1/2 flex-col gap-1 rounded-md border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-overlay)_86%,transparent)] px-2 py-1 text-xs text-[var(--color-text-muted)] shadow-[var(--shadow-float)] [backdrop-filter:var(--panel-blur)]">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <div className="shrink-0 px-1 font-medium text-[var(--color-text-primary)]">
-            {generatedAvailable ? "Compare" : "Blockout"}
-          </div>
-          <div className="flex shrink-0 rounded-sm border border-[var(--color-border)] bg-[var(--color-inset)] p-0.5">
-            {(["blockout", "blend", "splat"] as ComparisonMode[]).map((mode) => {
-              const disabled = !generatedAvailable && mode !== "blockout";
-              return (
-                <button
-                  key={mode}
-                  type="button"
-                  aria-pressed={activeComparisonMode === mode}
-                  disabled={disabled}
-                  className={`h-7 min-w-0 rounded-sm px-2 font-medium capitalize ${
-                    activeComparisonMode === mode
-                      ? "bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
-                      : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
-                  } ${disabled ? "cursor-not-allowed opacity-45 hover:text-[var(--color-text-muted)]" : ""}`}
-                  onClick={() => selectComparisonMode(mode)}
-                >
-                  {mode === "blockout" ? "Block" : mode}
-                </button>
-              );
-            })}
-          </div>
-          {generatedAvailable ? (
-            <button
-              type="button"
-              aria-pressed={firstPersonEnabled}
-              aria-label={firstPersonEnabled ? "Exit first-person view" : "Enter first-person view"}
-              title={firstPersonEnabled ? "Exit first-person view" : "Enter first-person view"}
-              className={`flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-sm border border-[var(--color-border)] px-2 font-medium ${
-                firstPersonEnabled
-                  ? "bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
-                  : "bg-[var(--color-surface)] text-[var(--color-text-primary)] hover:bg-[var(--color-inset)]"
-              }`}
-              onClick={firstPersonEnabled ? exitFirstPerson : enterFirstPerson}
-            >
-              <Footprints className="size-3.5" />
-              <span>{firstPersonEnabled ? "Exit" : "Walk"}</span>
-            </button>
+      <ToolHintBanner tool={props.tool} />
+      {wantsSplat ? (
+        <div className="absolute right-3 bottom-12 flex flex-col gap-1 rounded-md border border-[var(--border-mid)] bg-[#16181d] px-2 py-1 text-xs shadow-[0_8px_24px_rgba(0,0,0,0.45)]">
+          <button
+            type="button"
+            aria-pressed={firstPersonEnabled}
+            aria-label={firstPersonEnabled ? "Exit first-person view" : "Enter first-person view"}
+            title={firstPersonEnabled ? "Exit first-person view" : "Enter first-person view"}
+            className={`flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-sm border border-[var(--border-dim)] px-2 font-medium ${
+              firstPersonEnabled
+                ? "bg-[var(--accent-dim)] text-[var(--accent-text)]"
+                : "bg-[var(--surface-input)] text-[var(--text-primary)] hover:bg-[var(--surface-overlay)]"
+            }`}
+            onClick={firstPersonEnabled ? exitFirstPerson : enterFirstPerson}
+          >
+            <Footprints className="size-3.5" />
+            <span>{firstPersonEnabled ? "Exit" : "Walk"}</span>
+          </button>
+          {objectSplatControlsVisible ? (
+            <div className="flex min-w-0 items-center gap-2 border-t border-[var(--border-dim)] pt-1">
+              <span className="shrink-0 font-medium text-[var(--text-bright)]">Object</span>
+              <span className="max-w-[7rem] truncate text-[var(--text-secondary)]">{selectedSplatRegion?.label}</span>
+              <div className="flex min-w-0 flex-1 rounded-sm border border-[var(--border-dim)] bg-[var(--surface-input)] p-0.5">
+                {OBJECT_SPLAT_MODES.map((mode) => (
+                  <button
+                    key={mode.value}
+                    type="button"
+                    aria-pressed={objectSplatMode === mode.value}
+                    className={cn(
+                      "min-w-0 flex-1 rounded-sm px-1.5 py-0.5 font-medium",
+                      objectSplatMode === mode.value
+                        ? "bg-[var(--accent-dim)] text-[var(--accent-text)]"
+                        : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
+                    )}
+                    onClick={() => setObjectSplatMode(mode.value)}
+                  >
+                    <span className="block truncate">{mode.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
           ) : null}
         </div>
-        {objectSplatControlsVisible ? (
-          <div className="flex min-w-0 items-center gap-2 border-t border-[var(--color-border)] pt-1">
-            <span className="shrink-0 font-medium text-[var(--color-text-primary)]">Object</span>
-            <span className="max-w-[7rem] truncate text-[var(--color-text-muted)]">{selectedSplatRegion?.label}</span>
-            <div className="flex min-w-0 flex-1 rounded-sm border border-[var(--color-border)] bg-[var(--color-inset)] p-0.5">
-              {OBJECT_SPLAT_MODES.map((mode) => (
-                <button
-                  key={mode.value}
-                  type="button"
-                  aria-pressed={objectSplatMode === mode.value}
-                  className={cn(
-                    "min-w-0 flex-1 rounded-sm px-1.5 py-0.5 font-medium",
-                    objectSplatMode === mode.value
-                      ? "bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
-                      : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]",
-                  )}
-                  onClick={() => setObjectSplatMode(mode.value)}
-                >
-                  <span className="block truncate">{mode.label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
-      </div>
+      ) : null}
       {splatOpacity > 0 && splatLoadState.status !== "ready" ? (
         <SplatViewportOverlay marble={props.marble} loadState={splatLoadState} />
       ) : null}
@@ -502,6 +508,9 @@ function SceneContent({
   instances,
   shapes,
   cameras,
+  doors,
+  windows,
+  wallSegments,
   activeShapeKind,
   selected,
   hovered,
@@ -510,6 +519,9 @@ function SceneContent({
   onInstancesChange,
   onShapesChange,
   onCamerasChange,
+  onDoorsChange,
+  onWindowsChange,
+  onWallSegmentsChange,
   onSelect,
   onToolChange,
   registerSceneCapture,
@@ -546,14 +558,22 @@ function SceneContent({
   const instancesRef = useRef(instances);
   const shapesRef = useRef(shapes);
   const camerasRef = useRef(cameras);
+  const doorsRef = useRef(doors);
+  const windowsRef = useRef(windows);
+  const wallSegmentsRef = useRef(wallSegments);
   const onRoomChangeRef = useRef(onRoomChange);
   const onInstancesChangeRef = useRef(onInstancesChange);
   const onShapesChangeRef = useRef(onShapesChange);
   const onCamerasChangeRef = useRef(onCamerasChange);
+  const onDoorsChangeRef = useRef(onDoorsChange);
+  const onWindowsChangeRef = useRef(onWindowsChange);
+  const onWallSegmentsChangeRef = useRef(onWallSegmentsChange);
   const wallDragRef = useRef<WallDragSession | null>(null);
   const objectDragRef = useRef<ObjectDragSession | null>(null);
   const shapeResizeRef = useRef<ShapeResizeSession | null>(null);
   const shapeRotateRef = useRef<ShapeRotateSession | null>(null);
+  const openingDragRef = useRef<OpeningDragSession | null>(null);
+  const segmentDragRef = useRef<SegmentDisplacementSession | null>(null);
   const pointerScratchRef = useRef({
     pointer: new THREE.Vector2(),
     raycaster: new THREE.Raycaster(),
@@ -582,6 +602,18 @@ function SceneContent({
   }, [cameras]);
 
   useEffect(() => {
+    doorsRef.current = doors;
+  }, [doors]);
+
+  useEffect(() => {
+    windowsRef.current = windows;
+  }, [windows]);
+
+  useEffect(() => {
+    wallSegmentsRef.current = wallSegments;
+  }, [wallSegments]);
+
+  useEffect(() => {
     onRoomChangeRef.current = onRoomChange;
   }, [onRoomChange]);
 
@@ -596,6 +628,18 @@ function SceneContent({
   useEffect(() => {
     onCamerasChangeRef.current = onCamerasChange;
   }, [onCamerasChange]);
+
+  useEffect(() => {
+    onDoorsChangeRef.current = onDoorsChange;
+  }, [onDoorsChange]);
+
+  useEffect(() => {
+    onWindowsChangeRef.current = onWindowsChange;
+  }, [onWindowsChange]);
+
+  useEffect(() => {
+    onWallSegmentsChangeRef.current = onWallSegmentsChange;
+  }, [onWallSegmentsChange]);
 
   useEffect(() => {
     const element = gl.domElement;
@@ -643,7 +687,14 @@ function SceneContent({
     function handleTrackpadWheel(event: WheelEvent) {
       const controls = orbitControlsRef.current;
       if (firstPersonActive || !controls?.enabled || event.ctrlKey) return;
-      if (shapeResizeRef.current || shapeRotateRef.current || objectDragRef.current || wallDragRef.current) return;
+      if (
+        shapeResizeRef.current ||
+        shapeRotateRef.current ||
+        objectDragRef.current ||
+        wallDragRef.current ||
+        openingDragRef.current ||
+        segmentDragRef.current
+      ) return;
 
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -677,6 +728,36 @@ function SceneContent({
       const hit = raycaster.ray.intersectPlane(FLOOR_PLANE, floorPoint);
       if (!hit) return null;
       return [floorPoint.x, 0.25, floorPoint.z];
+    },
+    [camera, gl.domElement],
+  );
+
+  const projectPointerToWallPlane = useCallback(
+    (wall: WallId, clientX: number, clientY: number): { offsetAlong: number; y: number; offsetPerp: number } | null => {
+      const rect = gl.domElement.getBoundingClientRect();
+      const ndc = new THREE.Vector2(
+        ((clientX - rect.left) / rect.width) * 2 - 1,
+        -((clientY - rect.top) / rect.height) * 2 + 1,
+      );
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(ndc, camera);
+      const room = roomRef.current;
+      const center = wallPosition(room, wall);
+      const normal = wall === "north" || wall === "south"
+        ? new THREE.Vector3(0, 0, 1)
+        : new THREE.Vector3(1, 0, 0);
+      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, new THREE.Vector3(center[0], 0, center[2]));
+      const target = new THREE.Vector3();
+      const hit = ray.ray.intersectPlane(plane, target);
+      if (!hit) return null;
+      const cx = (room.minX + room.maxX) / 2;
+      const cz = (room.minZ + room.maxZ) / 2;
+      if (wall === "east" || wall === "west") {
+        const sign = wall === "east" ? 1 : -1;
+        return { offsetAlong: target.z - cz, y: target.y, offsetPerp: (target.x - center[0]) * sign };
+      }
+      const sign = wall === "north" ? 1 : -1;
+      return { offsetAlong: target.x - cx, y: target.y, offsetPerp: (target.z - center[2]) * sign };
     },
     [camera, gl.domElement],
   );
@@ -1076,6 +1157,186 @@ function SceneContent({
     };
   }, [gl.domElement, projectPointerToFloor]);
 
+  useEffect(() => {
+    const element = gl.domElement;
+
+    function applyOpeningDrag() {
+      const session = openingDragRef.current;
+      if (!session) return;
+      session.rafId = null;
+      const projection = projectPointerToWallPlane(session.wall, session.latestClientX, session.latestClientY);
+      if (!projection) return;
+
+      const room = roomRef.current;
+      if (session.kind === "door") {
+        const door = doorsRef.current.find((item) => item.id === session.id);
+        if (!door) return;
+        const nextOffset = clampWallOffset(
+          room,
+          session.wall,
+          projection.offsetAlong - session.grabOffsetAlong,
+          door.width,
+        );
+        if (nextOffset === door.offset) return;
+        onDoorsChangeRef.current(
+          doorsRef.current.map((item) =>
+            item.id === session.id ? { ...item, offset: nextOffset } : item,
+          ),
+        );
+        return;
+      }
+
+      const window = windowsRef.current.find((item) => item.id === session.id);
+      if (!window) return;
+      const nextOffset = clampWallOffset(
+        room,
+        session.wall,
+        projection.offsetAlong - session.grabOffsetAlong,
+        window.width,
+      );
+      const nextBaseY = clampWindowVerticalOffset(
+        room,
+        projection.y - session.grabOffsetVertical,
+        window.height,
+      );
+      if (nextOffset === window.offset && nextBaseY === window.baseY) return;
+      onWindowsChangeRef.current(
+        windowsRef.current.map((item) =>
+          item.id === session.id ? { ...item, offset: nextOffset, baseY: nextBaseY } : item,
+        ),
+      );
+    }
+
+    function scheduleOpeningDragUpdate() {
+      const session = openingDragRef.current;
+      if (!session || session.rafId !== null) return;
+      session.rafId = window.requestAnimationFrame(applyOpeningDrag);
+    }
+
+    function endOpeningDrag(pointerId?: number) {
+      const session = openingDragRef.current;
+      if (!session || (pointerId !== undefined && session.pointerId !== pointerId)) return;
+      if (session.rafId !== null) window.cancelAnimationFrame(session.rafId);
+      try {
+        if (element.hasPointerCapture(session.pointerId)) {
+          element.releasePointerCapture(session.pointerId);
+        }
+      } catch {
+        // ignore release errors
+      }
+      const controls = orbitControlsRef.current;
+      if (controls) controls.enabled = session.previousControlsEnabled;
+      openingDragRef.current = null;
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      const session = openingDragRef.current;
+      if (!session || session.pointerId !== event.pointerId) return;
+      session.latestClientX = event.clientX;
+      session.latestClientY = event.clientY;
+      scheduleOpeningDragUpdate();
+    }
+
+    function handlePointerUp(event: PointerEvent) {
+      endOpeningDrag(event.pointerId);
+    }
+
+    function handleBlur() {
+      endOpeningDrag();
+    }
+
+    window.addEventListener("pointermove", handlePointerMove, { capture: true });
+    window.addEventListener("pointerup", handlePointerUp, { capture: true });
+    window.addEventListener("pointercancel", handlePointerUp, { capture: true });
+    window.addEventListener("blur", handleBlur);
+
+    return () => {
+      endOpeningDrag();
+      window.removeEventListener("pointermove", handlePointerMove, { capture: true });
+      window.removeEventListener("pointerup", handlePointerUp, { capture: true });
+      window.removeEventListener("pointercancel", handlePointerUp, { capture: true });
+      window.removeEventListener("blur", handleBlur);
+    };
+  }, [gl.domElement, projectPointerToWallPlane]);
+
+  useEffect(() => {
+    const element = gl.domElement;
+
+    function applySegmentDrag() {
+      const session = segmentDragRef.current;
+      if (!session) return;
+      session.rafId = null;
+      if (session.screenAxisLengthSq < 0.0001) return;
+
+      const room = roomRef.current;
+      const segmentation = wallSegmentsRef.current;
+      const segments = segmentation[session.wall];
+      const segment = segments.find((item) => item.id === session.segmentId);
+      if (!segment) return;
+
+      const deltaX = session.latestClientX - session.startClientX;
+      const deltaY = session.latestClientY - session.startClientY;
+      const meters =
+        (deltaX * session.screenAxisX + deltaY * session.screenAxisY) / session.screenAxisLengthSq;
+      const nextDisplacement = clampDisplacement(session.startDisplacement + meters, room, session.wall);
+      if (Math.abs(nextDisplacement - segment.displacement) < 0.001) return;
+      onWallSegmentsChangeRef.current(
+        setSegmentDisplacement(segmentation, session.wall, session.segmentId, nextDisplacement),
+      );
+    }
+
+    function scheduleSegmentDragUpdate() {
+      const session = segmentDragRef.current;
+      if (!session || session.rafId !== null) return;
+      session.rafId = window.requestAnimationFrame(applySegmentDrag);
+    }
+
+    function endSegmentDrag(pointerId?: number) {
+      const session = segmentDragRef.current;
+      if (!session || (pointerId !== undefined && session.pointerId !== pointerId)) return;
+      if (session.rafId !== null) window.cancelAnimationFrame(session.rafId);
+      try {
+        if (element.hasPointerCapture(session.pointerId)) {
+          element.releasePointerCapture(session.pointerId);
+        }
+      } catch {
+        // ignore release errors
+      }
+      const controls = orbitControlsRef.current;
+      if (controls) controls.enabled = session.previousControlsEnabled;
+      segmentDragRef.current = null;
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      const session = segmentDragRef.current;
+      if (!session || session.pointerId !== event.pointerId) return;
+      session.latestClientX = event.clientX;
+      session.latestClientY = event.clientY;
+      scheduleSegmentDragUpdate();
+    }
+
+    function handlePointerUp(event: PointerEvent) {
+      endSegmentDrag(event.pointerId);
+    }
+
+    function handleBlur() {
+      endSegmentDrag();
+    }
+
+    window.addEventListener("pointermove", handlePointerMove, { capture: true });
+    window.addEventListener("pointerup", handlePointerUp, { capture: true });
+    window.addEventListener("pointercancel", handlePointerUp, { capture: true });
+    window.addEventListener("blur", handleBlur);
+
+    return () => {
+      endSegmentDrag();
+      window.removeEventListener("pointermove", handlePointerMove, { capture: true });
+      window.removeEventListener("pointerup", handlePointerUp, { capture: true });
+      window.removeEventListener("pointercancel", handlePointerUp, { capture: true });
+      window.removeEventListener("blur", handleBlur);
+    };
+  }, [gl.domElement]);
+
   function updateInstance(next: FurnitureInstance) {
     onInstancesChange(instances.map((instance) => (instance.id === next.id ? next : instance)));
   }
@@ -1121,6 +1382,54 @@ function SceneContent({
     if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
 
     event.stopPropagation();
+    const room = roomRef.current;
+    const projection = projectPointerToWallPlane(wall, event.clientX, event.clientY);
+
+    if (tool === "add-door") {
+      const newDoor = createDoor(room, wall);
+      newDoor.offset = clampWallOffset(room, wall, projection?.offsetAlong ?? 0, newDoor.width);
+      onDoorsChangeRef.current([...doorsRef.current, newDoor]);
+      onSelect({ type: "door", id: newDoor.id });
+      onToolChange("select");
+      return;
+    }
+
+    if (tool === "add-window") {
+      const newWindow = createWindowOpening(room, wall);
+      newWindow.offset = clampWallOffset(room, wall, projection?.offsetAlong ?? 0, newWindow.width);
+      if (projection) {
+        newWindow.baseY = clampWindowVerticalOffset(
+          room,
+          (projection.y ?? newWindow.baseY) - newWindow.height / 2,
+          newWindow.height,
+        );
+      }
+      onWindowsChangeRef.current([...windowsRef.current, newWindow]);
+      onSelect({ type: "window", id: newWindow.id });
+      onToolChange("select");
+      return;
+    }
+
+    if (tool === "cut-wall") {
+      const offsetAlong = projection?.offsetAlong ?? 0;
+      const fraction = offsetToFraction(room, wall, offsetAlong);
+      const result = cutWallAt(wallSegmentsRef.current, wall, fraction);
+      if (result.next === wallSegmentsRef.current) return;
+      onWallSegmentsChangeRef.current(result.next);
+      const dragSegmentId = result.newSegmentIds?.[0];
+      if (dragSegmentId) {
+        onSelect({ type: "wall-segment", wall, id: dragSegmentId });
+        beginSegmentDrag(dragSegmentId, wall, 0, event);
+      }
+      onToolChange("select");
+      return;
+    }
+
+    if (!isSegmentationDefault(wallSegmentsRef.current, wall)) {
+      onSelect({ type: "wall", id: wall });
+      return;
+    }
+
     const point = projectPointerToFloor(event.clientX, event.clientY);
     const projectedValue = point ? (wall === "east" || wall === "west" ? point[0] : point[2]) : 0;
     const wallCenter = wallPosition(roomRef.current, wall);
@@ -1270,6 +1579,110 @@ function SceneContent({
     onSelect({ type: "shape", id: shape.id });
   }
 
+  function handleOpeningPointerDown(
+    kind: OpeningKind,
+    target: Door | WindowOpening,
+    event: ThreeEvent<PointerEvent>,
+  ) {
+    if (viewMode !== "blockout") return;
+    if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
+
+    event.stopPropagation();
+    onSelect({ type: kind, id: target.id });
+
+    if (tool !== "select" && tool !== "move") return;
+
+    const projection = projectPointerToWallPlane(target.wall, event.clientX, event.clientY);
+    if (!projection) return;
+
+    const baseY = kind === "door" ? 0 : (target as WindowOpening).baseY;
+    const grabVertical = projection.y - (baseY + target.height / 2);
+
+    const controls = orbitControlsRef.current;
+    openingDragRef.current = {
+      kind,
+      id: target.id,
+      pointerId: event.pointerId,
+      wall: target.wall,
+      startOffset: target.offset,
+      startBaseY: baseY,
+      grabOffsetAlong: projection.offsetAlong - target.offset,
+      grabOffsetVertical: grabVertical,
+      latestClientX: event.clientX,
+      latestClientY: event.clientY,
+      rafId: null,
+      previousControlsEnabled: controls?.enabled ?? true,
+    };
+    if (controls) controls.enabled = false;
+    try {
+      gl.domElement.setPointerCapture(event.pointerId);
+    } catch {
+      // ignore capture errors
+    }
+  }
+
+  function handleSegmentPointerDown(wall: WallId, segment: WallSegment, event: ThreeEvent<PointerEvent>) {
+    if (viewMode !== "blockout") return;
+    if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
+
+    event.stopPropagation();
+
+    if (tool === "cut-wall") {
+      const room = roomRef.current;
+      const projection = projectPointerToWallPlane(wall, event.clientX, event.clientY);
+      const offsetAlong = projection?.offsetAlong ?? 0;
+      const fraction = offsetToFraction(room, wall, offsetAlong);
+      const result = cutWallAt(wallSegmentsRef.current, wall, fraction);
+      if (result.next === wallSegmentsRef.current) return;
+      onWallSegmentsChangeRef.current(result.next);
+      const dragSegmentId = result.newSegmentIds?.[0];
+      if (dragSegmentId) {
+        onSelect({ type: "wall-segment", wall, id: dragSegmentId });
+        beginSegmentDrag(dragSegmentId, wall, segment.displacement, event);
+      }
+      onToolChange("select");
+      return;
+    }
+
+    onSelect({ type: "wall-segment", wall, id: segment.id });
+
+    if (tool !== "select" && tool !== "move") return;
+
+    beginSegmentDrag(segment.id, wall, segment.displacement, event);
+  }
+
+  function beginSegmentDrag(
+    segmentId: string,
+    wall: WallId,
+    startDisplacement: number,
+    event: ThreeEvent<PointerEvent>,
+  ) {
+    const wallCenter = wallPosition(roomRef.current, wall);
+    const screenAxis = screenPerpAxisForWall(wall, wallCenter, camera, gl.domElement);
+    const controls = orbitControlsRef.current;
+    segmentDragRef.current = {
+      segmentId,
+      pointerId: event.pointerId,
+      wall,
+      startDisplacement,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      screenAxisX: screenAxis.x,
+      screenAxisY: screenAxis.y,
+      screenAxisLengthSq: screenAxis.lengthSq,
+      latestClientX: event.clientX,
+      latestClientY: event.clientY,
+      rafId: null,
+      previousControlsEnabled: controls?.enabled ?? true,
+    };
+    if (controls) controls.enabled = false;
+    try {
+      gl.domElement.setPointerCapture(event.pointerId);
+    } catch {
+      // ignore capture errors
+    }
+  }
+
   return (
     <>
       <ViewportCamera />
@@ -1317,15 +1730,18 @@ function SceneContent({
       <group visible={blockoutOpacity > 0}>
         <BlockoutReferenceLayer
           room={room}
+          wallSegments={wallSegments}
           selected={selected}
           hovered={hoveredWall ? { type: "wall", id: hoveredWall } : hovered}
           editable={viewMode === "blockout"}
           opacity={blockoutOpacity}
+          tool={tool}
           onReferenceSelect={() => onSelect(null)}
           onWallPointerDown={handleWallPointerDown}
           onWallPointerOver={setHoveredWall}
           onWallPointerOut={(wall) => setHoveredWall((current) => (current === wall ? null : current))}
           onFloorPointerDown={handleFloorPointerDown}
+          onSegmentPointerDown={handleSegmentPointerDown}
         />
         {instances.map((instance) => {
           const asset = assetById?.get(instance.assetId) ?? assets.find((item) => item.id === instance.assetId);
@@ -1378,6 +1794,34 @@ function SceneContent({
             onChange={updateCamera}
           />
         ))}
+        {doors.map((door) => (
+          <DoorNode
+            key={door.id}
+            door={door}
+            room={room}
+            wallSegments={wallSegments}
+            selected={viewMode === "blockout" && selected?.type === "door" && selected.id === door.id}
+            hovered={viewMode === "blockout" && hovered?.type === "door" && hovered.id === door.id}
+            opacity={blockoutOpacity}
+            onPointerDown={(event) => handleOpeningPointerDown("door", door, event)}
+            onPointerOver={() => {}}
+            onPointerOut={() => {}}
+          />
+        ))}
+        {windows.map((window) => (
+          <WindowNode
+            key={window.id}
+            window={window}
+            room={room}
+            wallSegments={wallSegments}
+            selected={viewMode === "blockout" && selected?.type === "window" && selected.id === window.id}
+            hovered={viewMode === "blockout" && hovered?.type === "window" && hovered.id === window.id}
+            opacity={blockoutOpacity}
+            onPointerDown={(event) => handleOpeningPointerDown("window", window, event)}
+            onPointerOver={() => {}}
+            onPointerOut={() => {}}
+          />
+        ))}
       </group>
       {viewMode === "blockout" ? (
         <Html position={[room.minX, 0.04, room.maxZ + 0.22]} center zIndexRange={[0, 0]}>
@@ -1390,26 +1834,32 @@ function SceneContent({
 
 function BlockoutReferenceLayer({
   room,
+  wallSegments,
   selected,
   hovered,
   editable,
   opacity,
+  tool,
   onReferenceSelect,
   onWallPointerDown,
   onWallPointerOver,
   onWallPointerOut,
   onFloorPointerDown,
+  onSegmentPointerDown,
 }: {
   room: RoomBounds;
+  wallSegments: WallSegmentation;
   selected: SelectedRef;
   hovered: SelectedRef;
   editable: boolean;
   opacity: number;
+  tool: ToolMode;
   onReferenceSelect: () => void;
   onWallPointerDown: (wall: WallId, event: ThreeEvent<PointerEvent>) => void;
   onWallPointerOver: (wall: WallId) => void;
   onWallPointerOut: (wall: WallId) => void;
   onFloorPointerDown: (event: ThreeEvent<PointerEvent>) => void;
+  onSegmentPointerDown: (wall: WallId, segment: WallSegment, event: ThreeEvent<PointerEvent>) => void;
 }) {
   const gridCellColor = fadeSceneColor(SCENE_COLORS.gridCell, opacity);
   const gridSectionColor = fadeSceneColor(SCENE_COLORS.gridSection, opacity);
@@ -1438,23 +1888,181 @@ function BlockoutReferenceLayer({
         fadeFrom={0}
       />
       <WorldAxisGuides room={room} opacity={opacity} />
-      <RoomFloor room={room} opacity={opacity} onPointerDown={editable ? onFloorPointerDown : undefined} />
-      <RoomDoorMarker room={room} opacity={opacity} />
+      <RoomFloor
+        room={room}
+        wallSegments={wallSegments}
+        opacity={opacity}
+        onPointerDown={editable ? onFloorPointerDown : undefined}
+      />
       {(["north", "south", "east", "west"] as WallId[]).map((wall) => (
-        <WallMesh
+        <SegmentedWall
           key={wall}
           wall={wall}
           room={room}
-          selected={editable && selected?.type === "wall" && selected.id === wall}
-          hovered={editable && hovered?.type === "wall" && hovered.id === wall}
+          segments={wallSegments[wall]}
+          selected={selected}
+          hovered={hovered}
+          editable={editable}
           opacity={opacity}
-          onPointerDown={editable ? (event) => onWallPointerDown(wall, event) : undefined}
-          onPointerOver={editable ? () => onWallPointerOver(wall) : undefined}
-          onPointerOut={editable ? () => onWallPointerOut(wall) : undefined}
+          tool={tool}
+          onWallPointerDown={onWallPointerDown}
+          onWallPointerOver={onWallPointerOver}
+          onWallPointerOut={onWallPointerOut}
+          onSegmentPointerDown={onSegmentPointerDown}
         />
       ))}
     </group>
   );
+}
+
+type SegmentedWallProps = {
+  wall: WallId;
+  room: RoomBounds;
+  segments: WallSegment[];
+  selected: SelectedRef;
+  hovered: SelectedRef;
+  editable: boolean;
+  opacity: number;
+  tool: ToolMode;
+  onWallPointerDown: (wall: WallId, event: ThreeEvent<PointerEvent>) => void;
+  onWallPointerOver: (wall: WallId) => void;
+  onWallPointerOut: (wall: WallId) => void;
+  onSegmentPointerDown: (wall: WallId, segment: WallSegment, event: ThreeEvent<PointerEvent>) => void;
+};
+
+function SegmentedWall({
+  wall,
+  room,
+  segments,
+  selected,
+  hovered,
+  editable,
+  opacity,
+  tool,
+  onWallPointerDown,
+  onWallPointerOver,
+  onWallPointerOut,
+  onSegmentPointerDown,
+}: SegmentedWallProps) {
+  const wallSelected = editable && selected?.type === "wall" && selected.id === wall;
+  const wallHovered = editable && hovered?.type === "wall" && hovered.id === wall;
+  const wallLength = wallAxisLength(room, wall);
+  const isHorizontal = wall === "north" || wall === "south";
+  const center = wallPosition(room, wall);
+  const sign = wallSurfaceSign(wall);
+
+  return (
+    <group>
+      {segments.map((segment) => {
+        const segmentLength = (segment.end - segment.start) * wallLength;
+        const alongOffset = ((segment.start + segment.end) / 2 - 0.5) * wallLength;
+        const perp = sign * segment.displacement;
+        const position: Vec3 = isHorizontal
+          ? [(room.minX + room.maxX) / 2 + alongOffset, room.height / 2, center[2] + perp]
+          : [center[0] + perp, room.height / 2, (room.minZ + room.maxZ) / 2 + alongOffset];
+        const segmentSelected =
+          editable && selected?.type === "wall-segment" && selected.id === segment.id;
+        const segmentHovered =
+          editable && hovered?.type === "wall-segment" && hovered.id === segment.id;
+        const cursorActive = editable && (tool === "cut-wall" || segmentSelected);
+        return (
+          <SegmentMesh
+            key={segment.id}
+            wall={wall}
+            length={segmentLength}
+            height={room.height}
+            position={position}
+            opacity={opacity}
+            selected={segmentSelected || wallSelected}
+            hovered={segmentHovered || wallHovered}
+            highlightCursor={cursorActive}
+            onPointerDown={
+              editable
+                ? (event) => {
+                    if (segments.length === 1 && segment.displacement === 0 && tool !== "cut-wall") {
+                      onWallPointerDown(wall, event);
+                      return;
+                    }
+                    onSegmentPointerDown(wall, segment, event);
+                  }
+                : undefined
+            }
+            onPointerOver={editable ? () => onWallPointerOver(wall) : undefined}
+            onPointerOut={editable ? () => onWallPointerOut(wall) : undefined}
+          />
+        );
+      })}
+      {segments.slice(0, -1).map((segment, index) => {
+        const next = segments[index + 1];
+        const delta = next.displacement - segment.displacement;
+        if (Math.abs(delta) < 0.001) return null;
+        const cutAlong = (segment.end - 0.5) * wallLength;
+        const midDisp = (segment.displacement + next.displacement) / 2;
+        const perp = sign * midDisp;
+        const position: Vec3 = isHorizontal
+          ? [(room.minX + room.maxX) / 2 + cutAlong, room.height / 2, center[2] + perp]
+          : [center[0] + perp, room.height / 2, (room.minZ + room.maxZ) / 2 + cutAlong];
+        return (
+          <ConnectorMesh
+            key={`${segment.id}-${next.id}-connector`}
+            wall={wall}
+            depth={Math.abs(delta)}
+            height={room.height}
+            position={position}
+            opacity={opacity}
+            highlight={wallSelected || wallHovered}
+          />
+        );
+      })}
+      {(() => {
+        const first = segments[0];
+        if (!first || Math.abs(first.displacement) < 0.001) return null;
+        const startAlong = -wallLength / 2;
+        const midDisp = first.displacement / 2;
+        const perp = sign * midDisp;
+        const position: Vec3 = isHorizontal
+          ? [(room.minX + room.maxX) / 2 + startAlong, room.height / 2, center[2] + perp]
+          : [center[0] + perp, room.height / 2, (room.minZ + room.maxZ) / 2 + startAlong];
+        return (
+          <ConnectorMesh
+            key={`${wall}-start-connector`}
+            wall={wall}
+            depth={Math.abs(first.displacement)}
+            height={room.height}
+            position={position}
+            opacity={opacity}
+            highlight={wallSelected || wallHovered}
+          />
+        );
+      })()}
+      {(() => {
+        const last = segments[segments.length - 1];
+        if (!last || Math.abs(last.displacement) < 0.001) return null;
+        const endAlong = wallLength / 2;
+        const midDisp = last.displacement / 2;
+        const perp = sign * midDisp;
+        const position: Vec3 = isHorizontal
+          ? [(room.minX + room.maxX) / 2 + endAlong, room.height / 2, center[2] + perp]
+          : [center[0] + perp, room.height / 2, (room.minZ + room.maxZ) / 2 + endAlong];
+        return (
+          <ConnectorMesh
+            key={`${wall}-end-connector`}
+            wall={wall}
+            depth={Math.abs(last.displacement)}
+            height={room.height}
+            position={position}
+            opacity={opacity}
+            highlight={wallSelected || wallHovered}
+          />
+        );
+      })()}
+    </group>
+  );
+}
+
+function wallSurfaceSign(wall: WallId): number {
+  if (wall === "north" || wall === "east") return -1;
+  return 1;
 }
 
 function RoomDimensionBadge({
@@ -2003,6 +2611,24 @@ function screenAxisForWall(wall: WallId, wallCenter: Vec3, camera: THREE.Camera,
   return { x, y, lengthSq: x * x + y * y };
 }
 
+function screenPerpAxisForWall(
+  wall: WallId,
+  reference: Vec3,
+  camera: THREE.Camera,
+  element: HTMLCanvasElement,
+) {
+  const sign = wall === "north" || wall === "east" ? -1 : 1;
+  const axisEnd: Vec3 =
+    wall === "north" || wall === "south"
+      ? [reference[0], reference[1], reference[2] + sign]
+      : [reference[0] + sign, reference[1], reference[2]];
+  const start = worldToClientPoint(reference, camera, element);
+  const end = worldToClientPoint(axisEnd, camera, element);
+  const x = end.x - start.x;
+  const y = end.y - start.y;
+  return { x, y, lengthSq: x * x + y * y };
+}
+
 function worldToClientPoint(position: Vec3, camera: THREE.Camera, element: HTMLCanvasElement) {
   const rect = element.getBoundingClientRect();
   const projected = new THREE.Vector3(...position).project(camera);
@@ -2540,23 +3166,48 @@ function SplatViewportOverlay({ marble, loadState }: { marble: MarbleResult; loa
 
 function RoomFloor({
   room,
+  wallSegments,
   opacity,
   onPointerDown,
 }: {
   room: RoomBounds;
+  wallSegments: WallSegmentation;
   opacity: number;
   onPointerDown?: (event: ThreeEvent<PointerEvent>) => void;
 }) {
-  const width = room.maxX - room.minX;
-  const depth = room.maxZ - room.minZ;
+  const geometry = useMemo(() => {
+    const polygon = buildFloorPolygon(room, wallSegments);
+    if (polygon.length < 3) {
+      const width = room.maxX - room.minX;
+      const depth = room.maxZ - room.minZ;
+      return new THREE.PlaneGeometry(width, depth).translate(
+        (room.minX + room.maxX) / 2,
+        -(room.minZ + room.maxZ) / 2,
+        0,
+      );
+    }
+    const shape = new THREE.Shape();
+    shape.moveTo(polygon[0].x, -polygon[0].z);
+    for (let i = 1; i < polygon.length; i++) {
+      shape.lineTo(polygon[i].x, -polygon[i].z);
+    }
+    shape.closePath();
+    return new THREE.ShapeGeometry(shape);
+  }, [room, wallSegments]);
+
+  useEffect(() => {
+    return () => {
+      geometry.dispose();
+    };
+  }, [geometry]);
+
   return (
     <mesh
       receiveShadow
-      position={[(room.minX + room.maxX) / 2, 0, (room.minZ + room.maxZ) / 2]}
       rotation={[-Math.PI / 2, 0, 0]}
       onPointerDown={onPointerDown}
+      geometry={geometry}
     >
-      <planeGeometry args={[width, depth]} />
       <meshStandardMaterial
         color={SCENE_COLORS.floor}
         roughness={0.82}
@@ -2564,90 +3215,327 @@ function RoomFloor({
         transparent
         opacity={opacity}
         depthWrite={opacity >= 0.98}
+        side={THREE.DoubleSide}
       />
     </mesh>
   );
 }
 
-function RoomDoorMarker({ room, opacity }: { room: RoomBounds; opacity: number }) {
-  const doorWidth = Math.min(0.9, Math.max(0.65, (room.maxX - room.minX) * 0.16));
-  const doorHeight = Math.min(2.05, Math.max(1.75, room.height * 0.74));
-  const doorCenterX = Math.min(room.maxX - doorWidth / 2 - 0.25, room.minX + 1);
-  const z = room.minZ - 0.055;
-  const frameColor = fadeSceneColor(SCENE_COLORS.darkWood, opacity);
-  const panelColor = fadeSceneColor("#1B2530", opacity);
+const MAX_OUTWARD_DISPLACEMENT = 6;
+const MAX_INWARD_DISPLACEMENT_FACTOR = 0.7;
+
+function clampDisplacement(value: number, room: RoomBounds, wall: WallId): number {
+  const inwardLimit =
+    wall === "east" || wall === "west"
+      ? (room.maxX - room.minX) * MAX_INWARD_DISPLACEMENT_FACTOR
+      : (room.maxZ - room.minZ) * MAX_INWARD_DISPLACEMENT_FACTOR;
+  return Math.min(inwardLimit, Math.max(-MAX_OUTWARD_DISPLACEMENT, value));
+}
+
+function wallOrientation(wall: WallId): { rotationY: number; normalSign: number } {
+  switch (wall) {
+    case "north":
+      return { rotationY: Math.PI, normalSign: -1 };
+    case "south":
+      return { rotationY: 0, normalSign: 1 };
+    case "east":
+      return { rotationY: Math.PI / 2, normalSign: -1 };
+    case "west":
+      return { rotationY: -Math.PI / 2, normalSign: 1 };
+  }
+}
+
+function segmentDisplacementAtOffset(
+  room: RoomBounds,
+  wall: WallId,
+  segments: WallSegment[] | undefined,
+  offset: number,
+): number {
+  if (!segments || segments.length === 0) return 0;
+  const fraction = offsetToFraction(room, wall, offset);
+  const segment = findSegmentAtFraction(segments, fraction);
+  return segment.displacement;
+}
+
+function openingWorldPos(
+  room: RoomBounds,
+  wall: WallId,
+  offset: number,
+  y: number,
+  segments?: WallSegment[],
+): Vec3 {
+  const center = wallPosition(room, wall);
+  const displacement = segmentDisplacementAtOffset(room, wall, segments, offset);
+  const sign = wallSurfaceSign(wall);
+  if (wall === "north" || wall === "south") {
+    const cx = (room.minX + room.maxX) / 2;
+    return [cx + offset, y, center[2] + sign * displacement];
+  }
+  const cz = (room.minZ + room.maxZ) / 2;
+  return [center[0] + sign * displacement, y, cz + offset];
+}
+
+type DoorNodeProps = {
+  door: Door;
+  room: RoomBounds;
+  wallSegments: WallSegmentation;
+  selected: boolean;
+  hovered: boolean;
+  opacity: number;
+  onPointerDown: (event: ThreeEvent<PointerEvent>) => void;
+  onPointerOver: () => void;
+  onPointerOut: () => void;
+};
+
+function DoorNode({ door, room, wallSegments, selected, hovered, opacity, onPointerDown, onPointerOver, onPointerOut }: DoorNodeProps) {
+  const { rotationY } = wallOrientation(door.wall);
+  const position = openingWorldPos(room, door.wall, door.offset, door.height / 2, wallSegments[door.wall]);
+  const frameColor = fadeSceneColor(SCENE_COLORS.doorFrame, opacity);
+  const panelColor = fadeSceneColor(selected ? SCENE_COLORS.wallSelected : SCENE_COLORS.doorPanel, opacity);
+  const highlight = selected || hovered;
+  const panelDepth = WALL_THICKNESS + 0.04;
+  const frameDepth = WALL_THICKNESS + 0.06;
+  const knobOffset = panelDepth / 2 + 0.04;
+
+  const fullyVisible = opacity >= 0.99;
+  const panelAlpha = (selected ? 0.95 : hovered ? 0.9 : 0.85) * opacity;
+  const panelOpaque = fullyVisible && panelAlpha >= 0.99;
+  const frameAlpha = 0.95 * opacity;
+  const frameOpaque = fullyVisible && frameAlpha >= 0.99;
 
   return (
-    <group userData={{ captureHidden: true }}>
-      <mesh position={[doorCenterX, doorHeight / 2, z]}>
-        <boxGeometry args={[doorWidth, doorHeight, 0.035]} />
+    <group
+      position={position}
+      rotation={[0, rotationY, 0]}
+      onPointerOver={onPointerOver}
+      onPointerOut={onPointerOut}
+      onPointerDown={onPointerDown}
+    >
+      <mesh renderOrder={1}>
+        <boxGeometry args={[door.width, door.height, panelDepth]} />
         <meshStandardMaterial
           color={panelColor}
-          transparent
-          opacity={0.38 * opacity}
-          roughness={0.7}
-          depthWrite={false}
+          roughness={0.6}
+          transparent={!panelOpaque}
+          opacity={panelAlpha}
+          emissive={highlight ? SCENE_COLORS.wallSelected : "#000000"}
+          emissiveIntensity={selected ? 0.25 : hovered ? 0.12 : 0}
+          depthWrite={panelOpaque || panelAlpha >= 0.98}
         />
       </mesh>
-      <mesh position={[doorCenterX - doorWidth / 2, doorHeight / 2, z - 0.01]}>
-        <boxGeometry args={[0.055, doorHeight, 0.07]} />
-        <meshStandardMaterial color={frameColor} transparent opacity={0.82 * opacity} depthWrite={false} />
+      <mesh position={[-door.width / 2, 0, 0]} renderOrder={1}>
+        <boxGeometry args={[0.06, door.height, frameDepth]} />
+        <meshStandardMaterial
+          color={frameColor}
+          transparent={!frameOpaque}
+          opacity={frameAlpha}
+          depthWrite={frameOpaque}
+        />
       </mesh>
-      <mesh position={[doorCenterX + doorWidth / 2, doorHeight / 2, z - 0.01]}>
-        <boxGeometry args={[0.055, doorHeight, 0.07]} />
-        <meshStandardMaterial color={frameColor} transparent opacity={0.82 * opacity} depthWrite={false} />
+      <mesh position={[door.width / 2, 0, 0]} renderOrder={1}>
+        <boxGeometry args={[0.06, door.height, frameDepth]} />
+        <meshStandardMaterial
+          color={frameColor}
+          transparent={!frameOpaque}
+          opacity={frameAlpha}
+          depthWrite={frameOpaque}
+        />
       </mesh>
-      <mesh position={[doorCenterX, doorHeight, z - 0.01]}>
-        <boxGeometry args={[doorWidth + 0.11, 0.055, 0.07]} />
-        <meshStandardMaterial color={frameColor} transparent opacity={0.82 * opacity} depthWrite={false} />
+      <mesh position={[0, door.height / 2, 0]} renderOrder={1}>
+        <boxGeometry args={[door.width + 0.12, 0.06, frameDepth]} />
+        <meshStandardMaterial
+          color={frameColor}
+          transparent={!frameOpaque}
+          opacity={frameAlpha}
+          depthWrite={frameOpaque}
+        />
       </mesh>
-      <mesh position={[doorCenterX + doorWidth * 0.32, doorHeight * 0.5, z - 0.045]}>
-        <sphereGeometry args={[0.045, 16, 10]} />
-        <meshStandardMaterial color={SCENE_COLORS.warmLight} transparent opacity={0.9 * opacity} depthWrite={false} />
+      <mesh position={[door.width * 0.32, 0, knobOffset]} renderOrder={2}>
+        <sphereGeometry args={[0.04, 16, 10]} />
+        <meshStandardMaterial
+          color={SCENE_COLORS.warmLight}
+          transparent={!frameOpaque}
+          opacity={frameAlpha}
+          depthWrite={frameOpaque}
+        />
+      </mesh>
+      <mesh position={[door.width * 0.32, 0, -knobOffset]} renderOrder={2}>
+        <sphereGeometry args={[0.04, 16, 10]} />
+        <meshStandardMaterial
+          color={SCENE_COLORS.warmLight}
+          transparent={!frameOpaque}
+          opacity={frameAlpha}
+          depthWrite={frameOpaque}
+        />
       </mesh>
     </group>
   );
 }
 
-type WallMeshProps = {
-  wall: WallId;
+type WindowNodeProps = {
+  window: WindowOpening;
   room: RoomBounds;
+  wallSegments: WallSegmentation;
   selected: boolean;
   hovered: boolean;
   opacity: number;
+  onPointerDown: (event: ThreeEvent<PointerEvent>) => void;
+  onPointerOver: () => void;
+  onPointerOut: () => void;
+};
+
+function WindowNode({ window, room, wallSegments, selected, hovered, opacity, onPointerDown, onPointerOver, onPointerOut }: WindowNodeProps) {
+  const { rotationY } = wallOrientation(window.wall);
+  const centerY = window.baseY + window.height / 2;
+  const position = openingWorldPos(room, window.wall, window.offset, centerY, wallSegments[window.wall]);
+  const frameColor = fadeSceneColor(SCENE_COLORS.windowFrame, opacity);
+  const glassColor = fadeSceneColor(selected ? SCENE_COLORS.wallSelected : SCENE_COLORS.windowGlass, opacity);
+  const highlight = selected || hovered;
+  const glassDepth = WALL_THICKNESS - 0.02;
+  const frameDepth = WALL_THICKNESS + 0.06;
+  const frameThickness = 0.08;
+  const fullyVisible = opacity >= 0.99;
+  const frameAlpha = fullyVisible ? 1 : 0.95 * opacity;
+  const frameOpaque = fullyVisible;
+  const mullionAlpha = fullyVisible ? 1 : 0.9 * opacity;
+  const mullionOpaque = fullyVisible;
+  const innerWidth = Math.max(0.05, window.width - frameThickness * 2);
+  const innerHeight = Math.max(0.05, window.height - frameThickness * 2);
+
+  return (
+    <group
+      position={position}
+      rotation={[0, rotationY, 0]}
+      onPointerOver={onPointerOver}
+      onPointerOut={onPointerOut}
+      onPointerDown={onPointerDown}
+    >
+      <mesh renderOrder={1}>
+        <boxGeometry args={[innerWidth, innerHeight, glassDepth]} />
+        <meshStandardMaterial
+          color={glassColor}
+          roughness={0.18}
+          metalness={0.1}
+          transparent
+          opacity={(selected ? 0.7 : hovered ? 0.6 : 0.5) * opacity}
+          emissive={highlight ? SCENE_COLORS.wallSelected : SCENE_COLORS.windowGlass}
+          emissiveIntensity={selected ? 0.3 : 0.08}
+          depthWrite={false}
+        />
+      </mesh>
+      <mesh position={[-window.width / 2 + frameThickness / 2, 0, 0]} renderOrder={2}>
+        <boxGeometry args={[frameThickness, window.height, frameDepth]} />
+        <meshStandardMaterial
+          color={frameColor}
+          transparent={!frameOpaque}
+          opacity={frameAlpha}
+          depthWrite={frameOpaque}
+        />
+      </mesh>
+      <mesh position={[window.width / 2 - frameThickness / 2, 0, 0]} renderOrder={2}>
+        <boxGeometry args={[frameThickness, window.height, frameDepth]} />
+        <meshStandardMaterial
+          color={frameColor}
+          transparent={!frameOpaque}
+          opacity={frameAlpha}
+          depthWrite={frameOpaque}
+        />
+      </mesh>
+      <mesh position={[0, window.height / 2 - frameThickness / 2, 0]} renderOrder={2}>
+        <boxGeometry args={[innerWidth, frameThickness, frameDepth]} />
+        <meshStandardMaterial
+          color={frameColor}
+          transparent={!frameOpaque}
+          opacity={frameAlpha}
+          depthWrite={frameOpaque}
+        />
+      </mesh>
+      <mesh position={[0, -window.height / 2 + frameThickness / 2, 0]} renderOrder={2}>
+        <boxGeometry args={[innerWidth, frameThickness, frameDepth]} />
+        <meshStandardMaterial
+          color={frameColor}
+          transparent={!frameOpaque}
+          opacity={frameAlpha}
+          depthWrite={frameOpaque}
+        />
+      </mesh>
+      <mesh position={[0, 0, 0]} renderOrder={2}>
+        <boxGeometry args={[0.04, innerHeight, frameDepth]} />
+        <meshStandardMaterial
+          color={frameColor}
+          transparent={!mullionOpaque}
+          opacity={mullionAlpha}
+          depthWrite={mullionOpaque}
+        />
+      </mesh>
+      <mesh position={[0, 0, 0]} renderOrder={2}>
+        <boxGeometry args={[innerWidth, 0.04, frameDepth]} />
+        <meshStandardMaterial
+          color={frameColor}
+          transparent={!mullionOpaque}
+          opacity={mullionAlpha}
+          depthWrite={mullionOpaque}
+        />
+      </mesh>
+    </group>
+  );
+}
+
+const WALL_THICKNESS = 0.12;
+const WALL_HIT_PAD = 0.1;
+
+type SegmentMeshProps = {
+  wall: WallId;
+  length: number;
+  height: number;
+  position: Vec3;
+  opacity: number;
+  selected: boolean;
+  hovered: boolean;
+  highlightCursor: boolean;
   onPointerDown?: (event: ThreeEvent<PointerEvent>) => void;
   onPointerOver?: () => void;
   onPointerOut?: () => void;
 };
 
-function WallMesh({ wall, room, selected, hovered, opacity, onPointerDown, onPointerOver, onPointerOut }: WallMeshProps) {
-  const visibleSize = wallSize(room, wall);
+function SegmentMesh({
+  wall,
+  length,
+  height,
+  position,
+  opacity,
+  selected,
+  hovered,
+  highlightCursor,
+  onPointerDown,
+  onPointerOver,
+  onPointerOut,
+}: SegmentMeshProps) {
+  const isHorizontal = wall === "north" || wall === "south";
+  const visibleSize: Vec3 = isHorizontal
+    ? [length, height, WALL_THICKNESS]
+    : [WALL_THICKNESS, height, length];
   const outlineSize: Vec3 = [visibleSize[0] + 0.012, visibleSize[1] + 0.012, visibleSize[2] + 0.012];
+  const hitSize: Vec3 = isHorizontal
+    ? [length + 0.36, height, WALL_HIT_PAD]
+    : [WALL_HIT_PAD, height, length + 0.36];
   const highlighted = selected || hovered;
-  const hitSize: Vec3 =
-    wall === "east" || wall === "west"
-      ? [0.42, visibleSize[1], visibleSize[2] + 0.36]
-      : [visibleSize[0] + 0.36, visibleSize[1], 0.42];
-  const handleSize: Vec3 = wall === "east" || wall === "west" ? [0.3, 0.34, 0.62] : [0.62, 0.34, 0.3];
-  const dimensions = roomDimensions(room);
-  const selectedLabel =
-    wall === "east" || wall === "west" ? `${dimensions.width}m wide` : `${dimensions.depth}m deep`;
 
   return (
     <group
-      position={wallPosition(room, wall)}
+      position={position}
       onPointerOver={onPointerOver}
       onPointerOut={onPointerOut}
     >
-      <mesh castShadow receiveShadow onPointerDown={onPointerDown}>
+      <mesh castShadow receiveShadow onPointerDown={onPointerDown} renderOrder={0}>
         <boxGeometry args={visibleSize} />
         <meshStandardMaterial
           color={selected ? SCENE_COLORS.wallSelected : SCENE_COLORS.wall}
           transparent
-          opacity={(selected ? 0.88 : hovered ? 0.82 : 0.74) * opacity}
+          opacity={(selected ? 0.92 : hovered ? 0.84 : 0.74) * opacity}
           roughness={0.62}
           emissive={highlighted ? SCENE_COLORS.wallSelected : SCENE_COLORS.wall}
-          emissiveIntensity={selected ? 0.16 : hovered ? 0.1 : 0.05}
+          emissiveIntensity={selected ? 0.2 : hovered ? 0.1 : 0.05}
           depthWrite={opacity >= 0.98}
         />
       </mesh>
@@ -2658,34 +3546,63 @@ function WallMesh({ wall, room, selected, hovered, opacity, onPointerDown, onPoi
           color={highlighted ? SCENE_COLORS.wallSelectedEdge : SCENE_COLORS.wallEdge}
           wireframe
           transparent
-          opacity={(selected ? 0.62 : hovered ? 0.5 : 0.34) * opacity}
+          opacity={(selected ? 0.65 : hovered ? 0.5 : 0.34) * opacity}
           depthWrite={false}
         />
       </mesh>
-      {selected ? (
-        <>
-          <mesh position={[0, visibleSize[1] * 0.42, 0]} onPointerDown={onPointerDown}>
-            <boxGeometry args={handleSize} />
-            <meshStandardMaterial
-              color={SCENE_COLORS.wallSelected}
-              emissive={SCENE_COLORS.wallSelected}
-              emissiveIntensity={0.2}
-              roughness={0.45}
-              transparent
-              opacity={0.94 * opacity}
-              depthWrite={opacity >= 0.98}
-            />
-          </mesh>
-          <Html position={[0, visibleSize[1] + 0.34, 0]} center distanceFactor={10} zIndexRange={[0, 0]}>
-            <span className="whitespace-nowrap rounded border border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-overlay)_90%,transparent)] px-2 py-1 text-[11px] font-semibold capitalize text-[var(--color-accent-hover)] shadow-[var(--shadow-float)] [backdrop-filter:var(--panel-blur)]">
-              {wall} wall / {selectedLabel}
-            </span>
-          </Html>
-        </>
-      ) : null}
       <mesh onPointerDown={onPointerDown}>
         <boxGeometry args={hitSize} />
-        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+        <meshBasicMaterial
+          userData={{ captureHidden: true, cursorHighlight: highlightCursor }}
+          transparent
+          opacity={0}
+          depthWrite={false}
+        />
+      </mesh>
+    </group>
+  );
+}
+
+type ConnectorMeshProps = {
+  wall: WallId;
+  depth: number;
+  height: number;
+  position: Vec3;
+  opacity: number;
+  highlight: boolean;
+};
+
+function ConnectorMesh({ wall, depth, height, position, opacity, highlight }: ConnectorMeshProps) {
+  const isHorizontal = wall === "north" || wall === "south";
+  const visibleSize: Vec3 = isHorizontal
+    ? [WALL_THICKNESS, height, depth]
+    : [depth, height, WALL_THICKNESS];
+  const outlineSize: Vec3 = [visibleSize[0] + 0.012, visibleSize[1] + 0.012, visibleSize[2] + 0.012];
+
+  return (
+    <group position={position}>
+      <mesh castShadow receiveShadow>
+        <boxGeometry args={visibleSize} />
+        <meshStandardMaterial
+          color={highlight ? SCENE_COLORS.wallSelected : SCENE_COLORS.wall}
+          transparent
+          opacity={0.84 * opacity}
+          roughness={0.6}
+          emissive={highlight ? SCENE_COLORS.wallSelected : SCENE_COLORS.wall}
+          emissiveIntensity={highlight ? 0.18 : 0.05}
+          depthWrite={opacity >= 0.98}
+        />
+      </mesh>
+      <mesh>
+        <boxGeometry args={outlineSize} />
+        <meshBasicMaterial
+          userData={{ captureHidden: true }}
+          color={highlight ? SCENE_COLORS.wallSelectedEdge : SCENE_COLORS.wallEdge}
+          wireframe
+          transparent
+          opacity={0.34 * opacity}
+          depthWrite={false}
+        />
       </mesh>
     </group>
   );
@@ -3301,5 +4218,24 @@ function SelectionRing({ opacity = 1, selected = true }: { opacity?: number; sel
       <ringGeometry args={[0.85, 0.9, 48]} />
       <meshBasicMaterial color={SCENE_COLORS.accent} transparent opacity={(selected ? 0.9 : 0.48) * opacity} />
     </mesh>
+  );
+}
+
+function ToolHintBanner({ tool }: { tool: ToolMode }) {
+  const hint =
+    tool === "cut-wall"
+      ? "Click on a wall to slice it, then drag in the same motion to pull the new face in or out. Each cut produces an independent segment with a connector wall."
+      : tool === "add-door"
+        ? "Click on any wall to place a new door. Switch to Select to drag it along the wall."
+        : tool === "add-window"
+          ? "Click on a wall (at any height) to place a window. Switch to Select to slide or raise it."
+          : null;
+
+  if (!hint) return null;
+
+  return (
+    <div className="pointer-events-none absolute inset-x-4 bottom-4 mx-auto max-w-md rounded-md border border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-overlay)_92%,transparent)] px-3 py-2 text-center text-xs font-medium text-[var(--color-accent-hover)] shadow-[var(--shadow-float)] [backdrop-filter:var(--panel-blur)]">
+      {hint}
+    </div>
   );
 }

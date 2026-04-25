@@ -1,0 +1,39 @@
+:root {
+  --surface-void:    #090a0c;
+  --surface-base:    #0e1014;
+  --surface-raised:  #13151a;
+  --surface-overlay: #181b21;
+  --surface-input:   #1c1f26;
+  --surface-active:  #1a2235;
+
+  --border-dim: rgba(255, 255, 255, 0.055);
+  --border-mid: rgba(255, 255, 255, 0.09);
+
+  --text-bright:    #eceef2;
+  --text-primary:   #9ba3af;
+  --text-secondary: #555c68;
+  --text-ghost:     #30343b;
+
+  --accent:        #3b8eff;
+  --accent-dim:    rgba(59, 142, 255, 0.10);
+  --accent-border: rgba(59, 142, 255, 0.22);
+  --accent-text:   #6aadff;
+
+  --status-ready:            #34c97a;
+  --status-ready-bg:         rgba(52, 201, 122, 0.08);
+  --status-ready-border:     rgba(52, 201, 122, 0.18);
+  --status-generating:       #e8a83a;
+  --status-generating-bg:    rgba(232, 168, 58, 0.08);
+  --status-generating-border: rgba(232, 168, 58, 0.18);
+  --status-error:            #e85555;
+  --status-error-bg:         rgba(232, 85, 85, 0.08);
+  --status-error-border:     rgba(232, 85, 85, 0.18);
+
+  --grid-minor:  rgba(255, 255, 255, 0.028);
+  --grid-major:  rgba(255, 255, 255, 0.055);
+  --grid-axis-x: rgba(60, 160, 80, 0.45);
+  --grid-axis-z: rgba(180, 60, 60, 0.45);
+
+  --font-ui:   var(--font-plex-sans, 'IBM Plex Sans'), sans-serif;
+  --font-mono: var(--font-plex-mono, 'IBM Plex Mono'), monospace;
+}
