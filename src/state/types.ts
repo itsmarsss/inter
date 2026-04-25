@@ -126,7 +126,7 @@ export type SelectedRef =
   | null;
 
 export type MarblePayload = {
-  model: "marble-1.1";
+  model: "marble-1.0-draft" | "marble-1.0" | "marble-1.1" | "marble-1.1-plus";
   world_prompt: {
     type: "image" | "multi-image" | "text";
     text_prompt: string;

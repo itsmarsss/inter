@@ -210,7 +210,10 @@ export async function generateMarbleRoom(body: Record<string, unknown>) {
       world_prompt: {
         type: mediaAsset ? "image" : "text",
         text_prompt: payload.world_prompt.text_prompt,
-        disable_recaption: Boolean(mediaAsset),
+        // Allow Marble's recaptioner to interpret the panorama and merge it
+        // with our short style hint. With a clear, well-lit pano this gives
+        // better layout adherence than passing our text verbatim.
+        disable_recaption: false,
         image_prompt: mediaAsset
           ? {
               source: "media_asset",

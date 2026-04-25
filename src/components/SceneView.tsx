@@ -187,6 +187,26 @@ type SegmentDisplacementSession = {
   previousControlsEnabled: boolean;
 };
 
+/**
+ * Bright, well-lit "blockout" colors used only when capturing the layout
+ * panorama for Marble. Marble's image guidance recommends clear floor / wall /
+ * ceiling contrast so its model can read the spatial structure. The editor's
+ * normal dark theme is great for UX but reads as a dim grey box to Marble.
+ *
+ * Roles are tagged on the architectural meshes via `userData.captureRole` and
+ * applied/restored by `prepareSceneForLayoutCapture`.
+ */
+const LAYOUT_CAPTURE = {
+  background: "#E8E4D8",
+  floor: "#C9A37A",
+  wall: "#EFEAE0",
+  doorPanel: "#7A4A2B",
+  doorFrame: "#3A2410",
+  windowGlass: "#9BC4E2",
+  windowFrame: "#3A2410",
+  ambientIntensity: 0.95,
+} as const;
+
 const SCENE_COLORS = {
   background: "#080B10",
   floor: "#111821",
@@ -582,7 +602,9 @@ function SceneContent({
   const [hoveredWall, setHoveredWall] = useState<WallId | null>(null);
   const { camera, gl, scene } = useThree();
   useEffect(() => {
-    registerSceneCapture(() => captureLayoutPano(scene, gl, roomRef.current));
+    registerSceneCapture(() =>
+      captureLayoutPano(scene, gl, roomRef.current, wallSegmentsRef.current),
+    );
   }, [gl, registerSceneCapture, scene]);
 
   useEffect(() => {
@@ -2647,9 +2669,14 @@ function splatAlignmentFromMarble(marble: MarbleResult): SplatAlignment {
   };
 }
 
-function captureLayoutPano(scene: THREE.Scene, renderer: THREE.WebGLRenderer, room: RoomBounds): CaptureImage | undefined {
+function captureLayoutPano(
+  scene: THREE.Scene,
+  renderer: THREE.WebGLRenderer,
+  room: RoomBounds,
+  wallSegments: WallSegmentation,
+): CaptureImage | undefined {
   try {
-    const position = layoutPanoCameraPosition(room);
+    const position = layoutPanoCameraPosition(room, wallSegments);
     const primary = renderLayoutPano(scene, renderer, position, LAYOUT_PANO_WIDTH);
     const capture =
       dataUrlByteLength(primary.dataUrl) <= LAYOUT_PANO_MAX_DATA_URL_BYTES
@@ -2712,6 +2739,24 @@ function renderLayoutPano(
 function prepareSceneForLayoutCapture(scene: THREE.Scene) {
   const restores: Array<() => void> = [];
 
+  // Swap the scene background to a bright neutral so the panorama's "above
+  // the walls" region reads as a flat ceiling/sky to Marble instead of empty
+  // dark space.
+  const previousBackground = scene.background;
+  scene.background = new THREE.Color(LAYOUT_CAPTURE.background);
+  restores.push(() => {
+    scene.background = previousBackground;
+  });
+
+  // Inject a strong ambient light so flat blockout faces are uniformly lit
+  // (no harsh shadows that confuse Marble's spatial interpretation).
+  const captureLight = new THREE.AmbientLight("#ffffff", LAYOUT_CAPTURE.ambientIntensity);
+  captureLight.userData.layoutCaptureLight = true;
+  scene.add(captureLight);
+  restores.push(() => {
+    scene.remove(captureLight);
+  });
+
   scene.traverse((object) => {
     const shouldHide =
       object.userData.captureHidden === true ||
@@ -2727,6 +2772,7 @@ function prepareSceneForLayoutCapture(scene: THREE.Scene) {
     }
 
     if (!(object instanceof THREE.Mesh)) return;
+    const captureRole = object.userData.captureRole as string | undefined;
     const materials = Array.isArray(object.material) ? object.material : [object.material];
     materials.forEach((material) => {
       if (!material) return;
@@ -2746,11 +2792,35 @@ function prepareSceneForLayoutCapture(scene: THREE.Scene) {
       material.transparent = false;
       material.opacity = 1;
       material.depthWrite = true;
+
+      // For tagged architectural meshes, swap the color (and emissive) to a
+      // bright capture-time palette so floor/walls/openings are readable to
+      // Marble. We restore the originals after capture so the editor view is
+      // untouched.
+      const overrideColor = captureColorForRole(captureRole);
+      let restoreColor: (() => void) | undefined;
+      if (overrideColor) {
+        const colored = material as THREE.Material & { color?: THREE.Color; emissive?: THREE.Color; emissiveIntensity?: number };
+        const previousColor = colored.color?.clone();
+        const previousEmissive = colored.emissive?.clone();
+        const previousEmissiveIntensity = colored.emissiveIntensity;
+        if (colored.color) colored.color.set(overrideColor);
+        if (colored.emissive) {
+          colored.emissive.set("#000000");
+          if (typeof colored.emissiveIntensity === "number") colored.emissiveIntensity = 0;
+        }
+        restoreColor = () => {
+          if (previousColor && colored.color) colored.color.copy(previousColor);
+          if (previousEmissive && colored.emissive) colored.emissive.copy(previousEmissive);
+          if (typeof previousEmissiveIntensity === "number") colored.emissiveIntensity = previousEmissiveIntensity;
+        };
+      }
       material.needsUpdate = true;
       restores.push(() => {
         material.transparent = previousTransparent;
         material.opacity = previousOpacity;
         material.depthWrite = previousDepthWrite;
+        restoreColor?.();
         material.needsUpdate = true;
       });
     });
@@ -2759,6 +2829,25 @@ function prepareSceneForLayoutCapture(scene: THREE.Scene) {
   return () => {
     for (let index = restores.length - 1; index >= 0; index -= 1) restores[index]();
   };
+}
+
+function captureColorForRole(role: string | undefined): string | undefined {
+  switch (role) {
+    case "floor":
+      return LAYOUT_CAPTURE.floor;
+    case "wall":
+      return LAYOUT_CAPTURE.wall;
+    case "door-panel":
+      return LAYOUT_CAPTURE.doorPanel;
+    case "door-frame":
+      return LAYOUT_CAPTURE.doorFrame;
+    case "window-glass":
+      return LAYOUT_CAPTURE.windowGlass;
+    case "window-frame":
+      return LAYOUT_CAPTURE.windowFrame;
+    default:
+      return undefined;
+  }
 }
 
 function readCubeFaces(renderer: THREE.WebGLRenderer, target: THREE.WebGLCubeRenderTarget, size: number) {
@@ -2846,12 +2935,41 @@ function sampleCubeFace(faces: Uint8Array[], size: number, direction: THREE.Vect
   return [pixels[index], pixels[index + 1], pixels[index + 2]];
 }
 
-function layoutPanoCameraPosition(room: RoomBounds): Vec3 {
-  return [
-    (room.minX + room.maxX) / 2,
-    THREE.MathUtils.clamp(room.height * 0.55, 1.2, 1.7),
-    (room.minZ + room.maxZ) / 2,
-  ];
+/**
+ * Position the panorama capture camera at the centroid of the *actual* floor
+ * polygon (which accounts for outcrops/cuts) at human eye height. For a plain
+ * rectangular room this is identical to the geometric center; for L-shapes or
+ * outcrop layouts the centroid stays inside the room.
+ */
+function layoutPanoCameraPosition(room: RoomBounds, wallSegments: WallSegmentation): Vec3 {
+  const polygon = buildFloorPolygon(room, wallSegments);
+  const eyeY = THREE.MathUtils.clamp(WALK_EYE_HEIGHT, 1.2, Math.max(1.2, room.height - 0.4));
+  if (polygon.length < 3) {
+    return [(room.minX + room.maxX) / 2, eyeY, (room.minZ + room.maxZ) / 2];
+  }
+  const { x, z } = polygonCentroid(polygon);
+  return [x, eyeY, z];
+}
+
+function polygonCentroid(points: Array<{ x: number; z: number }>): { x: number; z: number } {
+  let area = 0;
+  let cx = 0;
+  let cz = 0;
+  for (let i = 0; i < points.length; i += 1) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    const cross = a.x * b.z - b.x * a.z;
+    area += cross;
+    cx += (a.x + b.x) * cross;
+    cz += (a.z + b.z) * cross;
+  }
+  area *= 0.5;
+  if (Math.abs(area) < 1e-6) {
+    const sumX = points.reduce((s, p) => s + p.x, 0);
+    const sumZ = points.reduce((s, p) => s + p.z, 0);
+    return { x: sumX / points.length, z: sumZ / points.length };
+  }
+  return { x: cx / (6 * area), z: cz / (6 * area) };
 }
 
 function dataUrlByteLength(dataUrl: string) {
@@ -3207,6 +3325,7 @@ function RoomFloor({
       rotation={[-Math.PI / 2, 0, 0]}
       onPointerDown={onPointerDown}
       geometry={geometry}
+      userData={{ captureRole: "floor" }}
     >
       <meshStandardMaterial
         color={SCENE_COLORS.floor}
@@ -3311,7 +3430,7 @@ function DoorNode({ door, room, wallSegments, selected, hovered, opacity, onPoin
       onPointerOut={onPointerOut}
       onPointerDown={onPointerDown}
     >
-      <mesh renderOrder={1}>
+      <mesh renderOrder={1} userData={{ captureRole: "door-panel" }}>
         <boxGeometry args={[door.width, door.height, panelDepth]} />
         <meshStandardMaterial
           color={panelColor}
@@ -3323,7 +3442,7 @@ function DoorNode({ door, room, wallSegments, selected, hovered, opacity, onPoin
           depthWrite={panelOpaque || panelAlpha >= 0.98}
         />
       </mesh>
-      <mesh position={[-door.width / 2, 0, 0]} renderOrder={1}>
+      <mesh position={[-door.width / 2, 0, 0]} renderOrder={1} userData={{ captureRole: "door-frame" }}>
         <boxGeometry args={[0.06, door.height, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
@@ -3332,7 +3451,7 @@ function DoorNode({ door, room, wallSegments, selected, hovered, opacity, onPoin
           depthWrite={frameOpaque}
         />
       </mesh>
-      <mesh position={[door.width / 2, 0, 0]} renderOrder={1}>
+      <mesh position={[door.width / 2, 0, 0]} renderOrder={1} userData={{ captureRole: "door-frame" }}>
         <boxGeometry args={[0.06, door.height, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
@@ -3341,7 +3460,7 @@ function DoorNode({ door, room, wallSegments, selected, hovered, opacity, onPoin
           depthWrite={frameOpaque}
         />
       </mesh>
-      <mesh position={[0, door.height / 2, 0]} renderOrder={1}>
+      <mesh position={[0, door.height / 2, 0]} renderOrder={1} userData={{ captureRole: "door-frame" }}>
         <boxGeometry args={[door.width + 0.12, 0.06, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
@@ -3410,7 +3529,7 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
       onPointerOut={onPointerOut}
       onPointerDown={onPointerDown}
     >
-      <mesh renderOrder={1}>
+      <mesh renderOrder={1} userData={{ captureRole: "window-glass" }}>
         <boxGeometry args={[innerWidth, innerHeight, glassDepth]} />
         <meshStandardMaterial
           color={glassColor}
@@ -3423,7 +3542,7 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
           depthWrite={false}
         />
       </mesh>
-      <mesh position={[-window.width / 2 + frameThickness / 2, 0, 0]} renderOrder={2}>
+      <mesh position={[-window.width / 2 + frameThickness / 2, 0, 0]} renderOrder={2} userData={{ captureRole: "window-frame" }}>
         <boxGeometry args={[frameThickness, window.height, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
@@ -3432,7 +3551,7 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
           depthWrite={frameOpaque}
         />
       </mesh>
-      <mesh position={[window.width / 2 - frameThickness / 2, 0, 0]} renderOrder={2}>
+      <mesh position={[window.width / 2 - frameThickness / 2, 0, 0]} renderOrder={2} userData={{ captureRole: "window-frame" }}>
         <boxGeometry args={[frameThickness, window.height, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
@@ -3441,7 +3560,7 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
           depthWrite={frameOpaque}
         />
       </mesh>
-      <mesh position={[0, window.height / 2 - frameThickness / 2, 0]} renderOrder={2}>
+      <mesh position={[0, window.height / 2 - frameThickness / 2, 0]} renderOrder={2} userData={{ captureRole: "window-frame" }}>
         <boxGeometry args={[innerWidth, frameThickness, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
@@ -3450,7 +3569,7 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
           depthWrite={frameOpaque}
         />
       </mesh>
-      <mesh position={[0, -window.height / 2 + frameThickness / 2, 0]} renderOrder={2}>
+      <mesh position={[0, -window.height / 2 + frameThickness / 2, 0]} renderOrder={2} userData={{ captureRole: "window-frame" }}>
         <boxGeometry args={[innerWidth, frameThickness, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
@@ -3459,7 +3578,7 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
           depthWrite={frameOpaque}
         />
       </mesh>
-      <mesh position={[0, 0, 0]} renderOrder={2}>
+      <mesh position={[0, 0, 0]} renderOrder={2} userData={{ captureRole: "window-frame" }}>
         <boxGeometry args={[0.04, innerHeight, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
@@ -3468,7 +3587,7 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
           depthWrite={mullionOpaque}
         />
       </mesh>
-      <mesh position={[0, 0, 0]} renderOrder={2}>
+      <mesh position={[0, 0, 0]} renderOrder={2} userData={{ captureRole: "window-frame" }}>
         <boxGeometry args={[innerWidth, 0.04, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
@@ -3527,7 +3646,7 @@ function SegmentMesh({
       onPointerOver={onPointerOver}
       onPointerOut={onPointerOut}
     >
-      <mesh castShadow receiveShadow onPointerDown={onPointerDown} renderOrder={0}>
+      <mesh castShadow receiveShadow onPointerDown={onPointerDown} renderOrder={0} userData={{ captureRole: "wall" }}>
         <boxGeometry args={visibleSize} />
         <meshStandardMaterial
           color={selected ? SCENE_COLORS.wallSelected : SCENE_COLORS.wall}
@@ -3581,7 +3700,7 @@ function ConnectorMesh({ wall, depth, height, position, opacity, highlight }: Co
 
   return (
     <group position={position}>
-      <mesh castShadow receiveShadow>
+      <mesh castShadow receiveShadow userData={{ captureRole: "wall" }}>
         <boxGeometry args={visibleSize} />
         <meshStandardMaterial
           color={highlight ? SCENE_COLORS.wallSelected : SCENE_COLORS.wall}
