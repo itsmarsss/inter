@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "Bash(npx tsc *)",
-      "Bash(npx next *)"
+      "Bash(npx next *)",
+      "WebFetch(domain:www.reactbits.dev)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(curl -s \"https://raw.githubusercontent.com/DavidHDev/react-bits/refs/heads/main/src/content/Backgrounds/RippleGrid/RippleGrid.jsx\")",
+      "Bash(npm install *)"
     ]
   }
 }
