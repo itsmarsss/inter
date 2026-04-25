@@ -40,17 +40,17 @@ export function BlueprintView({
   }, [registerBlueprintCapture]);
 
   return (
-    <div className="h-full bg-slate-950 p-3">
+    <div className="h-full bg-[var(--color-background)] p-2">
       <svg
         ref={svgRef}
         role="img"
         aria-label="Live room blueprint"
         viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`}
-        className="h-full w-full rounded border border-slate-800 bg-slate-100"
+        className="h-full w-full rounded-md border border-[var(--color-border)] bg-[#F4EEE6]"
       >
         <defs>
           <pattern id="bp-grid" width="0.5" height="0.5" patternUnits="userSpaceOnUse">
-            <path d="M .5 0 L 0 0 0 .5" fill="none" stroke="#cbd5e1" strokeWidth="0.015" />
+            <path d="M .5 0 L 0 0 0 .5" fill="none" stroke="#D7CCC0" strokeWidth="0.015" />
           </pattern>
         </defs>
         <rect x={view.x} y={view.y} width={view.width} height={view.height} fill="url(#bp-grid)" />
@@ -59,8 +59,8 @@ export function BlueprintView({
           y={room.minZ}
           width={room.maxX - room.minX}
           height={room.maxZ - room.minZ}
-          fill="#f8fafc"
-          stroke="#0f172a"
+          fill="#F4EEE6"
+          stroke="#3A332B"
           strokeWidth="0.12"
         />
         <line
@@ -68,7 +68,7 @@ export function BlueprintView({
           x2={room.maxX}
           y1={room.minZ - 0.45}
           y2={room.minZ - 0.45}
-          stroke="#0f766e"
+          stroke="#B8653F"
           strokeWidth="0.035"
         />
         <line
@@ -76,10 +76,10 @@ export function BlueprintView({
           x2={room.maxX + 0.45}
           y1={room.minZ}
           y2={room.maxZ}
-          stroke="#0f766e"
+          stroke="#B8653F"
           strokeWidth="0.035"
         />
-        <text x={(room.minX + room.maxX) / 2} y={room.minZ - 0.6} textAnchor="middle" fontSize="0.28" fill="#0f766e">
+        <text x={(room.minX + room.maxX) / 2} y={room.minZ - 0.6} textAnchor="middle" fontSize="0.28" fill="#B8653F">
           {dimensions.width}m
         </text>
         <text
@@ -87,7 +87,7 @@ export function BlueprintView({
           y={(room.minZ + room.maxZ) / 2}
           textAnchor="middle"
           fontSize="0.28"
-          fill="#0f766e"
+          fill="#B8653F"
           transform={`rotate(90 ${room.maxX + 0.62} ${(room.minZ + room.maxZ) / 2})`}
         >
           {dimensions.depth}m
@@ -95,7 +95,7 @@ export function BlueprintView({
         <path
           d={`M ${room.minX + 0.65} ${room.minZ} Q ${room.minX + 1.15} ${room.minZ + 0.15} ${room.minX + 1.35} ${room.minZ + 0.65}`}
           fill="none"
-          stroke="#0284c7"
+          stroke="#C96B5D"
           strokeWidth="0.045"
         />
         <line
@@ -103,7 +103,7 @@ export function BlueprintView({
           y1={room.minZ}
           x2={room.minX + 1.35}
           y2={room.minZ}
-          stroke="#f8fafc"
+          stroke="#F4EEE6"
           strokeWidth="0.15"
         />
         {instances.map((instance) => {
@@ -123,11 +123,11 @@ export function BlueprintView({
                 width={footprint.width}
                 height={footprint.depth}
                 rx="0.05"
-                fill={isSelected ? "#14b8a6" : "#94a3b8"}
-                stroke="#0f172a"
+                fill={isSelected ? "#B8653F" : "#A89F94"}
+                stroke="#3A332B"
                 strokeWidth="0.035"
               />
-              <text y="0.05" textAnchor="middle" fontSize="0.18" fill="#0f172a">
+              <text y="0.05" textAnchor="middle" fontSize="0.18" fill="#151310">
                 {asset?.name.split(" ")[0] ?? instance.name.split(" ")[0]}
               </text>
             </g>

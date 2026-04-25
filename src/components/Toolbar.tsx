@@ -20,18 +20,18 @@ const tools: Array<{ id: ToolMode; label: string; icon: React.ComponentType<{ cl
 
 export function Toolbar({ tool, onToolChange, onGenerateFinal, generating }: ToolbarProps) {
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between border-b border-slate-800 bg-slate-950 px-3 pt-[env(safe-area-inset-top)]">
+    <header className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-background)] px-3 pt-[env(safe-area-inset-top)]">
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-2 pr-2">
-          <div className="grid size-8 place-items-center rounded bg-teal-400 text-slate-950">
+          <div className="grid size-8 place-items-center rounded bg-[var(--color-accent-clay)] text-[var(--color-background)]">
             <Sparkles className="size-4" />
           </div>
           <div>
-            <h1 className="text-sm font-semibold text-slate-100">Marble Studio</h1>
-            <p className="text-[11px] text-slate-500">Blockout to generated world</p>
+            <h1 className="text-sm font-semibold text-[var(--color-text-primary)]">Marble Studio</h1>
+            <p className="text-[11px] text-[var(--color-text-muted)]">Blockout to generated world</p>
           </div>
         </div>
-        <nav className="flex items-center overflow-hidden rounded border border-slate-800 bg-slate-900">
+        <nav className="flex items-center overflow-hidden rounded border border-[var(--color-border)] bg-[var(--color-surface)]">
           {tools.map((item) => {
             const Icon = item.icon;
             return (
@@ -41,8 +41,8 @@ export function Toolbar({ tool, onToolChange, onGenerateFinal, generating }: Too
                 onClick={() => onToolChange(item.id)}
                 aria-pressed={tool === item.id}
                 className={cn(
-                  "flex h-9 items-center gap-2 border-r border-slate-800 px-3 text-xs font-medium text-slate-400 last:border-r-0 hover:bg-slate-800 hover:text-slate-100",
-                  tool === item.id && "bg-slate-800 text-teal-200",
+                  "flex h-9 items-center gap-2 border-r border-[var(--color-border)] px-3 text-xs font-medium text-[var(--color-text-muted)] last:border-r-0 hover:bg-[var(--color-inset)] hover:text-[var(--color-text-primary)]",
+                  tool === item.id && "bg-[var(--color-accent-soft)] text-[var(--color-accent-hover)]",
                 )}
               >
                 <Icon className="size-4" />
@@ -56,7 +56,7 @@ export function Toolbar({ tool, onToolChange, onGenerateFinal, generating }: Too
         type="button"
         onClick={onGenerateFinal}
         disabled={generating}
-        className="flex h-9 items-center gap-2 rounded bg-teal-400 px-4 text-sm font-semibold text-slate-950 hover:bg-teal-300 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+        className="flex h-9 items-center gap-2 rounded bg-[var(--color-accent-clay)] px-4 text-sm font-semibold text-[var(--color-background)] hover:bg-[var(--color-accent-hover)] disabled:cursor-not-allowed disabled:bg-[var(--color-inset)] disabled:text-[var(--color-text-muted)]"
       >
         <Sparkles className="size-4" />
         {generating ? "Generating" : "Generate Final Room"}

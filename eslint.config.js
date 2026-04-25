@@ -1,11 +1,10 @@
 import js from "@eslint/js";
 import reactHooks from "eslint-plugin-react-hooks";
-import reactRefresh from "eslint-plugin-react-refresh";
 import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default [
-  { ignores: ["dist"] },
+  { ignores: [".next", "dist", "next-env.d.ts"] },
   ...tseslint.configs.recommended,
   {
     files: ["**/*.{ts,tsx}"],
@@ -19,16 +18,14 @@ export default [
       }
     },
     plugins: {
-      "react-hooks": reactHooks,
-      "react-refresh": reactRefresh
+      "react-hooks": reactHooks
     },
     rules: {
       ...js.configs.recommended.rules,
       ...reactHooks.configs.recommended.rules,
       "no-unused-vars": "off",
       "no-undef": "off",
-      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
-      "react-refresh/only-export-components": ["warn", { allowConstantExport: true }]
+      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }]
     }
   }
 ];

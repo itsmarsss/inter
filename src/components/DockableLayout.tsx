@@ -24,7 +24,7 @@ export function DockableLayout({
   properties,
 }: DockableLayoutProps) {
   return (
-    <main className="min-h-0 flex-1 bg-slate-950 p-2">
+    <main className="min-h-0 flex-1 bg-[var(--color-background)] p-2">
       <PanelGroup direction="horizontal" className="h-full gap-2">
         <ResizePanel minSize={48} defaultSize={62}>
           <PanelGroup direction="vertical" className="h-full gap-2">
@@ -118,5 +118,5 @@ export function DockableLayout({
 }
 
 function ResizeHandle() {
-  return <PanelResizeHandle className="panel-resize rounded bg-slate-900 transition-colors" />;
+  return <PanelResizeHandle className="panel-resize rounded bg-[var(--color-surface)] transition-colors" />;
 }

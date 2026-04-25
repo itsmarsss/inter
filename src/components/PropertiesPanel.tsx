@@ -21,11 +21,13 @@ export function PropertiesPanel({
   if (!selected) {
     const dimensions = roomDimensions(room);
     return (
-      <div className="grid gap-2 p-3 text-xs text-slate-400">
+      <div className="grid gap-2 p-3 text-xs text-[var(--color-text-muted)]">
         <PropertyRow label="Room width" value={`${dimensions.width}m`} />
         <PropertyRow label="Room depth" value={`${dimensions.depth}m`} />
         <PropertyRow label="Wall height" value={`${dimensions.height}m`} />
-        <p className="pt-2 text-slate-500">Select a wall or furniture object to edit its properties.</p>
+        <p className="rounded-md border border-[var(--color-border)] bg-[var(--color-inset)] p-2 text-[var(--color-text-muted)]">
+          Select a wall or furniture object to edit its properties.
+        </p>
       </div>
     );
   }
@@ -35,7 +37,7 @@ export function PropertiesPanel({
   }
 
   const instance = instances.find((item) => item.id === selected.id);
-  if (!instance) return <div className="p-3 text-sm text-slate-500">Selection no longer exists.</div>;
+  if (!instance) return <div className="p-3 text-sm text-[var(--color-text-muted)]">Selection no longer exists.</div>;
   const asset = assets.find((item) => item.id === instance.assetId);
 
   function update(next: FurnitureInstance) {
@@ -45,11 +47,11 @@ export function PropertiesPanel({
   return (
     <div className="thin-scrollbar grid max-h-full gap-3 overflow-auto p-3">
       <div>
-        <label className="text-xs font-medium text-slate-400">Name</label>
+        <label className="text-xs font-medium text-[var(--color-text-muted)]">Name</label>
         <input
           value={instance.name}
           onChange={(event) => update({ ...instance, name: event.target.value })}
-          className="mt-1 h-8 w-full rounded border border-slate-700 bg-slate-900 px-2 text-sm text-slate-100 outline-none focus:border-teal-400"
+          className="mt-1 h-8 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-inset)] px-2 text-sm text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent-clay)]"
         />
       </div>
       <PropertyRow label="Source" value={asset?.prompt ?? "Unknown"} />
@@ -82,14 +84,14 @@ function WallProperties({
   return (
     <div className="grid gap-3 p-3">
       <PropertyRow label="Selected wall" value={wall} />
-      <label className="text-xs font-medium text-slate-400">
+      <label className="text-xs font-medium text-[var(--color-text-muted)]">
         Boundary position
         <input
           type="number"
           step="0.1"
           value={Number(value.toFixed(2))}
           onChange={(event) => update(Number(event.target.value))}
-          className="mt-1 h-8 w-full rounded border border-slate-700 bg-slate-900 px-2 text-sm text-slate-100 outline-none focus:border-teal-400"
+          className="mt-1 h-8 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-inset)] px-2 text-sm text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent-clay)]"
         />
       </label>
     </div>
@@ -106,11 +108,11 @@ function VectorEditor({
   onChange: (value: [number, number, number]) => void;
 }) {
   return (
-    <div>
-      <div className="mb-1 text-xs font-medium text-slate-400">{label}</div>
+    <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-2">
+      <div className="mb-1 text-xs font-medium text-[var(--color-text-muted)]">{label}</div>
       <div className="grid grid-cols-3 gap-2">
         {(["X", "Y", "Z"] as const).map((axis, index) => (
-          <label key={axis} className="text-[11px] text-slate-500">
+          <label key={axis} className="text-[11px] text-[var(--color-text-muted)]">
             {axis}
             <input
               type="number"
@@ -121,7 +123,7 @@ function VectorEditor({
                 next[index] = Number(event.target.value);
                 onChange(next);
               }}
-              className="mt-1 h-8 w-full rounded border border-slate-700 bg-slate-900 px-2 text-xs text-slate-100 outline-none focus:border-teal-400"
+              className="mt-1 h-8 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-inset)] px-2 text-xs text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent-clay)]"
             />
           </label>
         ))}
@@ -132,9 +134,9 @@ function VectorEditor({
 
 function PropertyRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded border border-slate-800 bg-slate-900 px-2 py-1.5">
-      <span className="text-xs text-slate-500">{label}</span>
-      <span className="truncate text-xs font-medium text-slate-200">{value}</span>
+    <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-1 py-1.5 last:border-b-0">
+      <span className="text-xs text-[var(--color-text-muted)]">{label}</span>
+      <span className="min-w-0 truncate text-right text-xs font-medium text-[var(--color-text-primary)]">{value}</span>
     </div>
   );
 }

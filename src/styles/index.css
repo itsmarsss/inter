@@ -2,7 +2,22 @@
 
 :root {
   color-scheme: dark;
-  background: #080a0f;
+  --color-background: #0b0a08;
+  --color-surface: #151310;
+  --color-overlay: #1b1814;
+  --color-inset: #24201b;
+  --color-border: #3a332b;
+  --color-text-primary: #f4eee6;
+  --color-text-muted: #a89f94;
+  --color-accent-clay: #b8653f;
+  --color-accent-hover: #ca7951;
+  --color-accent-soft: #2d211a;
+  --color-warning: #d6a24a;
+  --color-danger: #c96b5d;
+  --shadow-panel: 0 18px 48px rgba(0, 0, 0, 0.42);
+  --shadow-float: 0 10px 30px rgba(0, 0, 0, 0.34);
+  --panel-blur: blur(18px);
+  background: var(--color-background);
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
@@ -21,9 +36,7 @@ body {
   min-width: 320px;
   min-height: 100dvh;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 40% 0%, rgba(20, 184, 166, 0.14), transparent 28rem),
-    linear-gradient(180deg, #0b0f17 0%, #05070b 100%);
+  background: var(--color-background);
 }
 
 button,
@@ -32,14 +45,36 @@ textarea {
   font: inherit;
 }
 
+button,
+input,
+textarea,
+a {
+  transition:
+    border-color 160ms cubic-bezier(0.23, 1, 0.32, 1),
+    background-color 160ms cubic-bezier(0.23, 1, 0.32, 1),
+    color 160ms cubic-bezier(0.23, 1, 0.32, 1),
+    opacity 160ms cubic-bezier(0.23, 1, 0.32, 1),
+    transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+button:active:not(:disabled),
+a:active {
+  transform: scale(0.98);
+}
+
+textarea::selection,
+input::selection {
+  background: color-mix(in srgb, var(--color-accent-clay) 36%, transparent);
+}
+
 .panel-resize[data-resize-handle-state="hover"],
 .panel-resize[data-resize-handle-state="drag"] {
-  background: rgba(45, 212, 191, 0.4);
+  background: color-mix(in srgb, var(--color-accent-clay) 46%, transparent);
 }
 
 .thin-scrollbar {
   scrollbar-width: thin;
-  scrollbar-color: #334155 #0f172a;
+  scrollbar-color: var(--color-border) var(--color-surface);
 }
 
 .thin-scrollbar::-webkit-scrollbar {
@@ -48,10 +83,10 @@ textarea {
 }
 
 .thin-scrollbar::-webkit-scrollbar-track {
-  background: #0f172a;
+  background: var(--color-surface);
 }
 
 .thin-scrollbar::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: var(--color-border);
   border-radius: 999px;
 }
