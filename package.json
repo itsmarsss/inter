@@ -13,6 +13,7 @@
     "@base-ui/react": "^1.4.1",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.4.0",
+    "@react-three/xr": "^6.6.29",
     "@sparkjsdev/spark": "^0.1.10",
     "@tailwindcss/postcss": "^4.1.16",
     "clsx": "^2.1.1",

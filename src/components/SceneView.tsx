@@ -1,6 +1,7 @@
 import { SplatEdit, SplatEditRgbaBlendMode, SplatEditSdf, SplatEditSdfType, SplatMesh } from "@sparkjsdev/spark";
 import { Canvas, type ThreeEvent, useFrame, useThree } from "@react-three/fiber";
 import { Grid, Html, OrbitControls, PerspectiveCamera, TransformControls, useGLTF } from "@react-three/drei";
+import { XR, createXRStore, useXR } from "@react-three/xr";
 import { Camera, Minus, SlidersHorizontal } from "lucide-react";
 import { Component, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as THREE from "three";
@@ -295,6 +296,14 @@ const INITIAL_CAMERA_POSITION: Vec3 = [6.5, 5.2, 7];
 const WALK_SPEED = 2.4;
 const WALK_FAST_MULTIPLIER = 1.8;
 const WALK_EYE_HEIGHT = 1.6;
+
+/**
+ * Single module-level WebXR store. createXRStore() lazily wires Three.js's
+ * renderer.xr into the active <XR> tree, so creating it once at import time
+ * is safe even before any Canvas mounts. The button outside the Canvas calls
+ * `xrStore.enterVR()` directly; useXR() inside the tree reads session state.
+ */
+const xrStore = createXRStore();
 /**
  * Half-extent of the box (centered at the origin) the splat first-person
  * camera is allowed to roam. The local pre-baked splat is roughly bedroom-
@@ -466,19 +475,30 @@ export function SceneView(props: SceneViewProps) {
         }}
         className="h-full w-full"
       >
-        <SceneContent
-          {...props}
-          viewMode={activeViewMode}
-          generatedAvailable={generatedAvailable}
-          splatAlignment={splatAlignment}
-          splatObjectRegions={splatObjectRegions}
-          objectSplatMode={objectSplatControlsVisible ? objectSplatMode : "off"}
-          blockoutOpacity={blockoutOpacity}
-          splatOpacity={splatOpacity}
-          firstPersonActive={firstPersonActive}
-          onSplatLoadStateChange={setSplatLoadState}
-          setProjector={(projector) => (projectorRef.current = projector)}
-        />
+        {/*
+         * <XR> hooks the renderer into WebXR. When no XR session is active
+         * everything renders the same as before. When the user enters VR
+         * via xrStore.enterVR(), Three.js's renderer.xr takes over the
+         * camera (driven by the headset pose) and produces stereo frames
+         * for the HMD. Everything else in the scene — including the
+         * Gaussian splat — is drawn through the same render path, so it
+         * appears in the headset automatically.
+         */}
+        <XR store={xrStore}>
+          <SceneContent
+            {...props}
+            viewMode={activeViewMode}
+            generatedAvailable={generatedAvailable}
+            splatAlignment={splatAlignment}
+            splatObjectRegions={splatObjectRegions}
+            objectSplatMode={objectSplatControlsVisible ? objectSplatMode : "off"}
+            blockoutOpacity={blockoutOpacity}
+            splatOpacity={splatOpacity}
+            firstPersonActive={firstPersonActive}
+            onSplatLoadStateChange={setSplatLoadState}
+            setProjector={(projector) => (projectorRef.current = projector)}
+          />
+        </XR>
       </Canvas>
       {wantsSplat && objectSplatControlsVisible ? (
         <div className="absolute right-3 bottom-12 flex flex-col gap-1 rounded-md border border-[var(--border-mid)] bg-[#16181d] px-2 py-1 text-xs shadow-[0_8px_24px_rgba(0,0,0,0.45)]">
@@ -506,7 +526,12 @@ export function SceneView(props: SceneViewProps) {
           </div>
         </div>
       ) : null}
-      {wantsSplat && splatLoadState.status === "ready" ? <SplatWalkHint /> : null}
+      {wantsSplat && splatLoadState.status === "ready" ? (
+        <>
+          <SplatWalkHint />
+          <EnterVrButton />
+        </>
+      ) : null}
       {splatOpacity > 0 && splatLoadState.status !== "ready" ? (
         <SplatViewportOverlay marble={props.marble} loadState={splatLoadState} />
       ) : null}
@@ -605,6 +630,11 @@ function SceneContent({
   });
   const [hoveredWall, setHoveredWall] = useState<WallId | null>(null);
   const { camera, gl, scene } = useThree();
+  // While a WebXR session is presenting, the headset drives the camera —
+  // OrbitControls and the FirstPersonController must not also try to move
+  // it, or the user's view will jitter or be locked at the wrong height.
+  const xrPresenting = useXR((state) => state.session != null);
+  const firstPersonControlsActive = firstPersonActive && !xrPresenting;
   useEffect(() => {
     registerSceneCapture(() =>
       captureLayoutPano(scene, gl, roomRef.current, wallSegmentsRef.current),
@@ -1845,14 +1875,14 @@ function SceneContent({
       <OrbitControls
         ref={orbitControlsRef}
         makeDefault
-        enabled={!firstPersonActive}
+        enabled={!firstPersonControlsActive && !xrPresenting}
         enableDamping
         dampingFactor={0.08}
         maxPolarAngle={Math.PI / 2.05}
         mouseButtons={EDITING_MOUSE_BUTTONS}
         touches={VIEWPORT_TOUCHES}
       />
-      <FirstPersonController active={firstPersonActive} />
+      <FirstPersonController active={firstPersonControlsActive} />
       {generatedAvailable && marble.spzUrl ? (
         <MarbleSplatScene
           url={proxiedMarbleSpzUrl(marble.spzUrl)}
@@ -3454,6 +3484,80 @@ function SplatWalkHint() {
       <span className="mx-2 opacity-60">·</span>
       <span className="font-mono text-[var(--text-bright)]">Shift</span>
       <span className="ml-1">to sprint</span>
+    </div>
+  );
+}
+
+/**
+ * Floating button that launches an immersive-vr WebXR session. Probes
+ * `navigator.xr.isSessionSupported('immersive-vr')` once on mount and only
+ * renders if the browser+device combo can actually present VR (so it stays
+ * hidden on a desktop Chrome without an HMD, but appears on the Quest 3
+ * browser). Clicking it calls `xrStore.enterVR()`, which negotiates the
+ * session and hands the renderer's camera over to the headset.
+ */
+function EnterVrButton() {
+  // Lazy initializer covers the SSR / no-WebXR cases up front so the effect
+  // below only runs the async support probe — keeps us on the right side of
+  // the React 19 "no setState in effects" lint rule.
+  const [supported, setSupported] = useState<boolean | null>(() => {
+    if (typeof navigator === "undefined") return false;
+    const xr = (navigator as Navigator & { xr?: XRSystem }).xr;
+    if (!xr || typeof xr.isSessionSupported !== "function") return false;
+    return null;
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (supported !== null) return;
+    let cancelled = false;
+    const xr = (navigator as Navigator & { xr?: XRSystem }).xr;
+    if (!xr) return;
+    xr.isSessionSupported("immersive-vr")
+      .then((value) => {
+        if (!cancelled) setSupported(Boolean(value));
+      })
+      .catch(() => {
+        if (!cancelled) setSupported(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [supported]);
+
+  const handleEnter = useCallback(async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      const result = await xrStore.enterVR();
+      if (!result) {
+        setError("Headset declined the session.");
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to enter VR.");
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  if (!supported) return null;
+
+  return (
+    <div className="pointer-events-none absolute right-3 top-3 flex flex-col items-end gap-1">
+      <button
+        type="button"
+        onClick={handleEnter}
+        disabled={busy}
+        className="pointer-events-auto rounded-md border border-[var(--border-mid)] bg-[color-mix(in_srgb,#16181d_92%,transparent)] px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--text-bright)] shadow-[0_8px_24px_rgba(0,0,0,0.35)] [backdrop-filter:blur(6px)] transition-colors hover:bg-[color-mix(in_srgb,var(--accent-dim,#3a4250)_60%,#16181d)] disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {busy ? "Entering…" : "Enter VR"}
+      </button>
+      {error ? (
+        <div className="pointer-events-none rounded-sm bg-[color-mix(in_srgb,#16181d_92%,transparent)] px-2 py-1 text-[10px] text-[var(--color-warning,#f5a25d)] shadow-[0_4px_12px_rgba(0,0,0,0.35)]">
+          {error}
+        </div>
+      ) : null}
     </div>
   );
 }
