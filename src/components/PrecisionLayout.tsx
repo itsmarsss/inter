@@ -31,6 +31,7 @@ import { WorldPanel } from "./WorldPanel";
 type PrecisionLayoutProps = {
   viewport: ReactNode;
   blueprint: ReactNode;
+  blueprintPreview: ReactNode;
 
   furnitureAssets: FurnitureAsset[];
   furnitureInstances: FurnitureInstance[];
@@ -72,6 +73,7 @@ type PrecisionLayoutProps = {
 export function PrecisionLayout({
   viewport,
   blueprint,
+  blueprintPreview,
   furnitureAssets,
   furnitureInstances,
   customShapes,
@@ -193,10 +195,7 @@ export function PrecisionLayout({
       />
       <MinimapPanel
         room={room}
-        instances={furnitureInstances}
-        doors={doors}
-        windows={windows}
-        wallSegments={wallSegments}
+        blueprint={blueprintPreview}
         onExpand={() => setBlueprintDialogOpen(true)}
       />
 
