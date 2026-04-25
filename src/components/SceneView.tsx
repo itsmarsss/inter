@@ -6,6 +6,7 @@ import { Component, Suspense, useCallback, useEffect, useMemo, useRef, useState,
 import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl, PointerLockControls as PointerLockControlsImpl } from "three-stdlib";
 import {
+  buildFloorPolygon,
   clampToRoom,
   clampWallOffset,
   clampWindowVerticalOffset,
@@ -1940,7 +1941,12 @@ function BlockoutReferenceLayer({
         fadeFrom={0}
       />
       <WorldAxisGuides room={room} opacity={opacity} />
-      <RoomFloor room={room} opacity={opacity} onPointerDown={editable ? onFloorPointerDown : undefined} />
+      <RoomFloor
+        room={room}
+        wallSegments={wallSegments}
+        opacity={opacity}
+        onPointerDown={editable ? onFloorPointerDown : undefined}
+      />
       {(["north", "south", "east", "west"] as WallId[]).map((wall) => (
         <SegmentedWall
           key={wall}
@@ -3213,23 +3219,48 @@ function SplatViewportOverlay({ marble, loadState }: { marble: MarbleResult; loa
 
 function RoomFloor({
   room,
+  wallSegments,
   opacity,
   onPointerDown,
 }: {
   room: RoomBounds;
+  wallSegments: WallSegmentation;
   opacity: number;
   onPointerDown?: (event: ThreeEvent<PointerEvent>) => void;
 }) {
-  const width = room.maxX - room.minX;
-  const depth = room.maxZ - room.minZ;
+  const geometry = useMemo(() => {
+    const polygon = buildFloorPolygon(room, wallSegments);
+    if (polygon.length < 3) {
+      const width = room.maxX - room.minX;
+      const depth = room.maxZ - room.minZ;
+      return new THREE.PlaneGeometry(width, depth).translate(
+        (room.minX + room.maxX) / 2,
+        -(room.minZ + room.maxZ) / 2,
+        0,
+      );
+    }
+    const shape = new THREE.Shape();
+    shape.moveTo(polygon[0].x, -polygon[0].z);
+    for (let i = 1; i < polygon.length; i++) {
+      shape.lineTo(polygon[i].x, -polygon[i].z);
+    }
+    shape.closePath();
+    return new THREE.ShapeGeometry(shape);
+  }, [room, wallSegments]);
+
+  useEffect(() => {
+    return () => {
+      geometry.dispose();
+    };
+  }, [geometry]);
+
   return (
     <mesh
       receiveShadow
-      position={[(room.minX + room.maxX) / 2, 0, (room.minZ + room.maxZ) / 2]}
       rotation={[-Math.PI / 2, 0, 0]}
       onPointerDown={onPointerDown}
+      geometry={geometry}
     >
-      <planeGeometry args={[width, depth]} />
       <meshStandardMaterial
         color={SCENE_COLORS.floor}
         roughness={0.82}
@@ -3237,6 +3268,7 @@ function RoomFloor({
         transparent
         opacity={opacity}
         depthWrite={opacity >= 0.98}
+        side={THREE.DoubleSide}
       />
     </mesh>
   );

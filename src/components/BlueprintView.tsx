@@ -16,6 +16,7 @@ import type {
   WindowOpening,
 } from "../state/types";
 import {
+  buildFloorPolygon,
   clampToRoom,
   clampWallOffset,
   findSegmentAtFraction,
@@ -108,6 +109,18 @@ export function BlueprintView({
     };
   }, [room]);
   const dimensions = roomDimensions(room);
+  const floorPolygonPoints = useMemo(() => {
+    const segmentation =
+      wallSegments ?? {
+        north: [{ id: "north-default", start: 0, end: 1, displacement: 0 }],
+        south: [{ id: "south-default", start: 0, end: 1, displacement: 0 }],
+        east: [{ id: "east-default", start: 0, end: 1, displacement: 0 }],
+        west: [{ id: "west-default", start: 0, end: 1, displacement: 0 }],
+      };
+    const polygon = buildFloorPolygon(room, segmentation);
+    if (polygon.length < 3) return null;
+    return polygon.map((point) => `${point.x},${point.z}`).join(" ");
+  }, [room, wallSegments]);
 
   useEffect(() => {
     registerBlueprintCapture(() => {
@@ -378,15 +391,25 @@ export function BlueprintView({
           </pattern>
         </defs>
         <rect x={view.x} y={view.y} width={view.width} height={view.height} fill="url(#bp-grid)" />
-        <rect
-          x={room.minX}
-          y={room.minZ}
-          width={room.maxX - room.minX}
-          height={room.maxZ - room.minZ}
-          fill="#FFF9EE"
-          stroke="#14232B"
-          strokeWidth="0.18"
-        />
+        {floorPolygonPoints ? (
+          <polygon
+            points={floorPolygonPoints}
+            fill="#FFF9EE"
+            stroke="#14232B"
+            strokeWidth="0.18"
+            strokeLinejoin="miter"
+          />
+        ) : (
+          <rect
+            x={room.minX}
+            y={room.minZ}
+            width={room.maxX - room.minX}
+            height={room.maxZ - room.minZ}
+            fill="#FFF9EE"
+            stroke="#14232B"
+            strokeWidth="0.18"
+          />
+        )}
         <BlueprintWallHandles
           room={room}
           selected={selected}

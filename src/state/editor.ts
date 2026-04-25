@@ -421,6 +421,59 @@ export function isSegmentationDefault(segmentation: WallSegmentation, wall: Wall
   return segments.length === 1 && segments[0].displacement === 0;
 }
 
+export type FloorPoint = { x: number; z: number };
+
+export function buildFloorPolygon(
+  room: RoomBounds,
+  segmentation: WallSegmentation,
+): FloorPoint[] {
+  const points: FloorPoint[] = [];
+  const width = room.maxX - room.minX;
+  const depth = room.maxZ - room.minZ;
+
+  const pushPoint = (point: FloorPoint) => {
+    const last = points[points.length - 1];
+    if (last && Math.abs(last.x - point.x) < 1e-4 && Math.abs(last.z - point.z) < 1e-4) return;
+    points.push(point);
+  };
+
+  for (const segment of segmentation.north) {
+    const z = room.maxZ - segment.displacement;
+    pushPoint({ x: room.minX + segment.start * width, z });
+    pushPoint({ x: room.minX + segment.end * width, z });
+  }
+
+  const eastReversed = [...segmentation.east].reverse();
+  for (const segment of eastReversed) {
+    const x = room.maxX - segment.displacement;
+    pushPoint({ x, z: room.minZ + segment.end * depth });
+    pushPoint({ x, z: room.minZ + segment.start * depth });
+  }
+
+  const southReversed = [...segmentation.south].reverse();
+  for (const segment of southReversed) {
+    const z = room.minZ + segment.displacement;
+    pushPoint({ x: room.minX + segment.end * width, z });
+    pushPoint({ x: room.minX + segment.start * width, z });
+  }
+
+  for (const segment of segmentation.west) {
+    const x = room.minX + segment.displacement;
+    pushPoint({ x, z: room.minZ + segment.start * depth });
+    pushPoint({ x, z: room.minZ + segment.end * depth });
+  }
+
+  if (points.length > 1) {
+    const first = points[0];
+    const last = points[points.length - 1];
+    if (Math.abs(first.x - last.x) < 1e-4 && Math.abs(first.z - last.z) < 1e-4) {
+      points.pop();
+    }
+  }
+
+  return points;
+}
+
 function inferPrimitive(prompt: string): FurnitureAsset["primitive"] {
   const text = prompt.toLowerCase();
   if (text.includes("chair")) return "chair";
