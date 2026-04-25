@@ -2,40 +2,88 @@
 
 import { Map, Maximize2 } from "lucide-react";
 import { type ReactNode, useState } from "react";
-import type { FurnitureInstance, RoomBounds } from "../state/types";
-import { roomDimensions } from "../state/editor";
+import {
+  buildFloorPolygon,
+  findSegmentAtFraction,
+  offsetToFraction,
+  roomDimensions,
+} from "../state/editor";
+import type {
+  Door,
+  FurnitureInstance,
+  RoomBounds,
+  WallId,
+  WallSegment,
+  WallSegmentation,
+  WindowOpening,
+} from "../state/types";
 
 type MinimapPanelProps = {
   room: RoomBounds;
   instances: FurnitureInstance[];
+  doors?: Door[];
+  windows?: WindowOpening[];
+  wallSegments?: WallSegmentation;
   onExpand?: () => void;
 };
 
-const SVG_W = 210;
-const SVG_H = 160;
-const PAD_X = 22;
-const PAD_Y = 18;
+const SVG_W = 220;
+const SVG_H = 165;
+const PAD_X = 24;
+const PAD_Y = 22;
 
-export function MinimapPanel({ room, instances, onExpand }: MinimapPanelProps) {
+export function MinimapPanel({
+  room,
+  instances,
+  doors = [],
+  windows = [],
+  wallSegments,
+  onExpand,
+}: MinimapPanelProps) {
   const dims = roomDimensions(room);
 
-  const roomW = room.maxX - room.minX;
-  const roomD = room.maxZ - room.minZ;
+  const segmentation: WallSegmentation = wallSegments ?? {
+    north: [{ id: "north-default", start: 0, end: 1, displacement: 0 }],
+    east: [{ id: "east-default", start: 0, end: 1, displacement: 0 }],
+    south: [{ id: "south-default", start: 0, end: 1, displacement: 0 }],
+    west: [{ id: "west-default", start: 0, end: 1, displacement: 0 }],
+  };
+
+  const polygon = buildFloorPolygon(room, segmentation);
+  const xs = polygon.length > 0 ? polygon.map((p) => p.x) : [room.minX, room.maxX];
+  const zs = polygon.length > 0 ? polygon.map((p) => p.z) : [room.minZ, room.maxZ];
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minZ = Math.min(...zs);
+  const maxZ = Math.max(...zs);
+
+  const polyW = maxX - minX;
+  const polyH = maxZ - minZ;
   const usableW = SVG_W - PAD_X * 2;
   const usableH = SVG_H - PAD_Y * 2;
-  const scale = Math.min(usableW / roomW, usableH / roomD) * 0.92;
+  const scale = Math.min(usableW / polyW, usableH / polyH) * 0.94;
 
-  const drawW = roomW * scale;
-  const drawH = roomD * scale;
+  const drawW = polyW * scale;
+  const drawH = polyH * scale;
   const originX = SVG_W / 2 - drawW / 2;
   const originY = SVG_H / 2 - drawH / 2;
 
-  function toSvgX(wx: number) {
-    return originX + (wx - room.minX) * scale;
+  function toSvg(x: number, z: number) {
+    return {
+      x: originX + (x - minX) * scale,
+      y: originY + (z - minZ) * scale,
+    };
   }
-  function toSvgY(wz: number) {
-    return originY + (wz - room.minZ) * scale;
-  }
+
+  const polyPoints = polygon.map((p) => {
+    const s = toSvg(p.x, p.z);
+    return `${s.x.toFixed(2)},${s.y.toFixed(2)}`;
+  }).join(" ");
+
+  const openings = [
+    ...doors.map((door) => ({ kind: "door" as const, opening: door })),
+    ...windows.map((win) => ({ kind: "window" as const, opening: win })),
+  ];
 
   return (
     <div
@@ -43,44 +91,55 @@ export function MinimapPanel({ room, instances, onExpand }: MinimapPanelProps) {
         position: "absolute",
         top: 12,
         right: 12,
-        width: 210,
-        background: "var(--surface-raised)",
-        border: "1px solid var(--border-dim)",
-        borderRadius: 7,
+        width: 220,
+        background: "#16181d",
+        border: "1px solid var(--border-mid)",
+        borderRadius: 6,
         overflow: "hidden",
         zIndex: 15,
         pointerEvents: "auto",
+        boxShadow: "0 8px 24px rgba(0, 0, 0, 0.5)",
+        fontFamily: "var(--font-ui)",
       }}
     >
       <div
         style={{
-          height: 36,
+          height: 32,
           padding: "0 10px",
           display: "flex",
           alignItems: "center",
-          gap: 6,
+          gap: 8,
           borderBottom: "1px solid var(--border-dim)",
         }}
       >
-        <Map size={12} strokeWidth={1.5} color="var(--text-secondary)" />
+        <Map size={11} strokeWidth={1.6} color="var(--accent-text)" />
         <span
           style={{
-            fontSize: 12,
+            fontSize: 11,
             fontWeight: 500,
             color: "var(--text-bright)",
             flex: 1,
-            fontFamily: "var(--font-ui)",
+            letterSpacing: "0.02em",
           }}
         >
           Blueprint
         </span>
-        <HeaderBtn icon={<Maximize2 size={10} strokeWidth={1.5} />} label="Expand" onClick={onExpand} />
+        <span
+          style={{
+            fontSize: 10,
+            color: "var(--text-secondary)",
+            fontFamily: "var(--font-mono)",
+            letterSpacing: "0.02em",
+          }}
+        >
+          {dims.width.toFixed(1)} × {dims.depth.toFixed(1)} m
+        </span>
+        <HeaderBtn icon={<Maximize2 size={10} strokeWidth={1.6} />} label="Expand" onClick={onExpand} />
       </div>
 
-      {/* Parchment canvas */}
       <div
         style={{
-          background: "#ede8dc",
+          background: "#0c0d11",
           aspectRatio: "4/3",
           position: "relative",
         }}
@@ -91,100 +150,113 @@ export function MinimapPanel({ room, instances, onExpand }: MinimapPanelProps) {
           viewBox={`0 0 ${SVG_W} ${SVG_H}`}
           style={{ display: "block" }}
         >
-          {/* Room perimeter */}
-          <rect
-            x={originX}
-            y={originY}
-            width={drawW}
-            height={drawH}
-            fill="none"
-            stroke="#b8a88a"
-            strokeWidth="1.5"
-          />
+          <defs>
+            <pattern id="minimap-grid" width="10" height="10" patternUnits="userSpaceOnUse">
+              <path d="M 10 0 L 0 0 0 10" fill="none" stroke="rgba(255,255,255,0.03)" strokeWidth="0.5" />
+            </pattern>
+          </defs>
+          <rect width={SVG_W} height={SVG_H} fill="url(#minimap-grid)" />
+
+          {polygon.length > 2 ? (
+            <polygon
+              points={polyPoints}
+              fill="rgba(59, 142, 255, 0.06)"
+              stroke="rgba(59, 142, 255, 0.55)"
+              strokeWidth="1.1"
+              strokeLinejoin="miter"
+            />
+          ) : null}
 
           {/* Furniture footprints */}
-          {instances.slice(0, 12).map((inst) => {
-            const fx = toSvgX(inst.position[0]);
-            const fz = toSvgY(inst.position[2]);
-            const fw = Math.max(8, inst.scale[0] * scale * 2);
-            const fd = Math.max(6, inst.scale[2] * scale * 2);
+          {instances.slice(0, 24).map((inst) => {
+            const center = toSvg(inst.position[0], inst.position[2]);
+            const fw = Math.max(4, inst.scale[0] * scale * 1.6);
+            const fd = Math.max(4, inst.scale[2] * scale * 1.6);
             return (
               <rect
                 key={inst.id}
-                x={fx - fw / 2}
-                y={fz - fd / 2}
+                x={center.x - fw / 2}
+                y={center.y - fd / 2}
                 width={fw}
                 height={fd}
-                fill="#c8b49a"
-                opacity={0.65}
+                fill="rgba(255, 255, 255, 0.18)"
+                stroke="rgba(255, 255, 255, 0.35)"
+                strokeWidth="0.4"
                 rx={1}
               />
             );
           })}
 
-          {/* Width dimension */}
-          <line
-            x1={originX}
-            y1={originY - 8}
-            x2={originX + drawW}
-            y2={originY - 8}
-            stroke="#b8a88a"
-            strokeWidth="0.5"
-            strokeDasharray="2 2"
-          />
-          <line x1={originX} y1={originY - 10} x2={originX} y2={originY - 6} stroke="#b8a88a" strokeWidth="0.5" />
-          <line x1={originX + drawW} y1={originY - 10} x2={originX + drawW} y2={originY - 6} stroke="#b8a88a" strokeWidth="0.5" />
-          <text
-            x={originX + drawW / 2}
-            y={originY - 11}
-            textAnchor="middle"
-            fontFamily="IBM Plex Mono, monospace"
-            fontSize="6"
-            fill="#8a7860"
-          >
-            {dims.width.toFixed(1)} m
-          </text>
-
-          {/* Depth dimension */}
-          <line
-            x1={originX + drawW + 8}
-            y1={originY}
-            x2={originX + drawW + 8}
-            y2={originY + drawH}
-            stroke="#b8a88a"
-            strokeWidth="0.5"
-            strokeDasharray="2 2"
-          />
-          <text
-            x={originX + drawW + 15}
-            y={originY + drawH / 2}
-            textAnchor="middle"
-            fontFamily="IBM Plex Mono, monospace"
-            fontSize="6"
-            fill="#8a7860"
-            transform={`rotate(90, ${originX + drawW + 15}, ${originY + drawH / 2})`}
-          >
-            {dims.depth.toFixed(1)} m
-          </text>
+          {/* Door / window openings */}
+          {openings.map(({ kind, opening }) => {
+            const seg = openingSegmentCoords(opening, room, segmentation[opening.wall]);
+            const a = toSvg(seg.x1, seg.z1);
+            const b = toSvg(seg.x2, seg.z2);
+            const isDoor = kind === "door";
+            return (
+              <g key={`${kind}-${opening.id}`}>
+                {/* Mask the wall under the opening */}
+                <line
+                  x1={a.x}
+                  y1={a.y}
+                  x2={b.x}
+                  y2={b.y}
+                  stroke="#0c0d11"
+                  strokeWidth="2.2"
+                  strokeLinecap="butt"
+                />
+                {/* Opening marker */}
+                <line
+                  x1={a.x}
+                  y1={a.y}
+                  x2={b.x}
+                  y2={b.y}
+                  stroke={isDoor ? "#34c97a" : "#6aadff"}
+                  strokeWidth={isDoor ? 1.4 : 1.0}
+                  strokeDasharray={isDoor ? undefined : "1.5 1.2"}
+                  strokeLinecap="round"
+                />
+              </g>
+            );
+          })}
         </svg>
 
+        {/* Legend */}
         <div
           style={{
             position: "absolute",
-            bottom: 4,
-            right: 5,
-            color: "#b8a88a",
-            fontSize: 11,
-            lineHeight: 1,
-            userSelect: "none",
-            cursor: "nwse-resize",
+            bottom: 5,
+            left: 7,
+            display: "flex",
+            gap: 10,
             fontFamily: "var(--font-mono)",
+            fontSize: 9,
+            color: "var(--text-secondary)",
+            letterSpacing: "0.02em",
+            pointerEvents: "none",
           }}
         >
-          ⌟
+          <LegendChip color="#34c97a" label={`${doors.length} door${doors.length === 1 ? "" : "s"}`} />
+          <LegendChip color="#6aadff" label={`${windows.length} window${windows.length === 1 ? "" : "s"}`} dashed />
         </div>
       </div>
     </div>
+  );
+}
+
+function LegendChip({ color, label, dashed }: { color: string; label: string; dashed?: boolean }) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+      <span
+        style={{
+          width: 8,
+          height: 2,
+          background: dashed ? `repeating-linear-gradient(90deg, ${color} 0 2px, transparent 2px 4px)` : color,
+          borderRadius: 1,
+        }}
+      />
+      {label}
+    </span>
   );
 }
 
@@ -203,8 +275,8 @@ function HeaderBtn({ icon, label, onClick }: { icon: ReactNode; label: string; o
         height: 20,
         borderRadius: 3,
         border: "none",
-        background: hovered ? "rgba(255,255,255,0.07)" : "transparent",
-        color: hovered ? "var(--text-primary)" : "var(--text-secondary)",
+        background: hovered ? "var(--surface-overlay)" : "transparent",
+        color: hovered ? "var(--text-bright)" : "var(--text-secondary)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -215,4 +287,55 @@ function HeaderBtn({ icon, label, onClick }: { icon: ReactNode; label: string; o
       {icon}
     </button>
   );
+}
+
+/**
+ * Compute the opening's two endpoints in floor-space (x, z), accounting for
+ * any wall-segment displacement (so doors and windows on outcrops follow the
+ * shifted wall instead of the original perimeter).
+ */
+function openingSegmentCoords(
+  opening: Door | WindowOpening,
+  room: RoomBounds,
+  segments: WallSegment[] | undefined,
+): { x1: number; z1: number; x2: number; z2: number } {
+  const cx = (room.minX + room.maxX) / 2;
+  const cz = (room.minZ + room.maxZ) / 2;
+  const half = opening.width / 2;
+  const { dx, dz } = applySegmentationToOpening(room, opening.wall, opening.offset, segments);
+
+  if (opening.wall === "north" || opening.wall === "south") {
+    const z = (opening.wall === "north" ? room.maxZ : room.minZ) + dz;
+    return {
+      x1: cx + opening.offset - half,
+      z1: z,
+      x2: cx + opening.offset + half,
+      z2: z,
+    };
+  }
+  const x = (opening.wall === "east" ? room.maxX : room.minX) + dx;
+  return {
+    x1: x,
+    z1: cz + opening.offset - half,
+    x2: x,
+    z2: cz + opening.offset + half,
+  };
+}
+
+function applySegmentationToOpening(
+  room: RoomBounds,
+  wall: WallId,
+  offset: number,
+  segments: WallSegment[] | undefined,
+): { dx: number; dz: number } {
+  if (!segments || segments.length === 0) return { dx: 0, dz: 0 };
+  const fraction = offsetToFraction(room, wall, offset);
+  const segment = findSegmentAtFraction(segments, fraction);
+  // Match BlueprintView's wallSurfaceSign semantics: north/east push outward (-),
+  // south/west push outward (+). Displacement is the inward push from default.
+  const sign = wall === "north" || wall === "east" ? -1 : 1;
+  if (wall === "north" || wall === "south") {
+    return { dx: 0, dz: sign * segment.displacement };
+  }
+  return { dx: sign * segment.displacement, dz: 0 };
 }

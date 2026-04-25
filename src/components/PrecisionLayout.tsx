@@ -194,6 +194,9 @@ export function PrecisionLayout({
       <MinimapPanel
         room={room}
         instances={furnitureInstances}
+        doors={doors}
+        windows={windows}
+        wallSegments={wallSegments}
         onExpand={() => setBlueprintDialogOpen(true)}
       />
 

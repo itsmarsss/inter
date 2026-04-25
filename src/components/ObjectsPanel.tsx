@@ -59,15 +59,20 @@ type ToolDef = {
   icon: ComponentType<{ size?: number; strokeWidth?: number }>;
 };
 
-const PRIMARY_TOOLS: ToolDef[] = [
+const TRANSFORM_TOOLS: ToolDef[] = [
   { id: "select", label: "Select", icon: MousePointer2 },
   { id: "move", label: "Move", icon: Hand },
 ];
 
 const ARCHITECTURE_TOOLS: ToolDef[] = [
   { id: "cut-wall", label: "Cut wall (loop cut)", icon: Scissors },
-  { id: "add-door", label: "Add door", icon: DoorOpen },
-  { id: "add-window", label: "Add window", icon: RectangleHorizontal },
+  { id: "add-door", label: "Place door", icon: DoorOpen },
+  { id: "add-window", label: "Place window", icon: RectangleHorizontal },
+];
+
+const INSERT_TOOLS: ToolDef[] = [
+  { id: "add-shape", label: "Place shape", icon: Plus },
+  { id: "add-camera", label: "Place camera", icon: Camera },
 ];
 
 const SHAPE_OPTIONS: Array<{ kind: ShapeKind; label: string; icon: ComponentType<{ size?: number; strokeWidth?: number }> }> = [
@@ -77,6 +82,10 @@ const SHAPE_OPTIONS: Array<{ kind: ShapeKind; label: string; icon: ComponentType
   { kind: "cone", label: "Cone", icon: Triangle },
   { kind: "plane", label: "Plane", icon: Square },
 ];
+
+function wallLabel(wall: WallId): string {
+  return wall.charAt(0).toUpperCase() + wall.slice(1);
+}
 
 export function ObjectsPanel({
   open,
@@ -122,71 +131,45 @@ export function ObjectsPanel({
         overflow: "hidden",
         transition: "width 180ms cubic-bezier(0.4, 0, 0.2, 1), opacity 160ms ease",
         zIndex: 15,
+        fontFamily: "var(--font-ui)",
       }}
     >
-      <PanelHeader title="Objects" icon={Box} onClose={onClose} />
+      <PanelHeader title="Objects" onClose={onClose} />
 
-      <div
-        className="precision-scroll"
-        style={{ flex: 1, overflowY: "auto" }}
-      >
-        <ToolSection title="Transform">
-          <ToolGrid tools={PRIMARY_TOOLS} tool={tool} onToolChange={onToolChange} />
+      <div className="precision-scroll" style={{ flex: 1, overflowY: "auto", padding: "10px 0" }}>
+        <ToolSection label="Transform">
+          <ToolRow tools={TRANSFORM_TOOLS} tool={tool} onToolChange={onToolChange} />
         </ToolSection>
 
-        <ToolSection title="Architecture">
-          <ToolGrid tools={ARCHITECTURE_TOOLS} tool={tool} onToolChange={onToolChange} />
-          <Hint>
-            {tool === "cut-wall"
-              ? "Click anywhere on a wall to slice it, then drag to push the segment in or out."
-              : tool === "add-door"
-              ? "Click along a wall to drop a door."
-              : tool === "add-window"
-              ? "Click along a wall to drop a window."
-              : "Pick a tool above to edit walls."}
-          </Hint>
+        <ToolSection label="Architecture">
+          <ToolRow tools={ARCHITECTURE_TOOLS} tool={tool} onToolChange={onToolChange} />
         </ToolSection>
 
-        <ToolSection title="Add">
-          <ToolGrid
-            tools={[
-              { id: "add-shape", label: "Add shape", icon: Plus },
-              { id: "add-camera", label: "Add camera", icon: Camera },
-              { id: "add-furniture", label: "Add furniture", icon: Box },
-            ]}
-            tool={tool}
-            onToolChange={onToolChange}
-          />
+        <ToolSection label="Insert">
+          <ToolRow tools={INSERT_TOOLS} tool={tool} onToolChange={onToolChange} />
           {tool === "add-shape" ? (
-            <div style={{ marginTop: 6, display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 4 }}>
-              {SHAPE_OPTIONS.map(({ kind, label, icon: Icon }) => {
-                const active = activeShapeKind === kind;
-                return (
-                  <ToolButton
-                    key={kind}
-                    label={label}
-                    icon={Icon}
-                    active={active}
-                    onClick={() => onActiveShapeKindChange(kind)}
-                  />
-                );
-              })}
-            </div>
+            <ShapePicker activeKind={activeShapeKind} onChange={onActiveShapeKindChange} />
           ) : null}
         </ToolSection>
 
+        <Divider />
+
         <ListSection
-          title="Doors"
+          label="Doors"
           count={doors.length}
           action={
-            <PanelIconBtn label="Add door" icon={<Plus size={11} strokeWidth={1.5} />} onClick={onAddDoor} />
+            <RowAction
+              icon={<Plus size={11} strokeWidth={1.6} />}
+              label="Add door"
+              onClick={onAddDoor}
+            />
           }
         >
           {doors.length === 0 ? (
-            <EmptyHint>No doors yet</EmptyHint>
+            <EmptyHint>No doors</EmptyHint>
           ) : (
             doors.map((door) => (
-              <Row
+              <ItemRow
                 key={door.id}
                 icon={DoorOpen}
                 label={door.name}
@@ -200,17 +183,21 @@ export function ObjectsPanel({
         </ListSection>
 
         <ListSection
-          title="Windows"
+          label="Windows"
           count={windows.length}
           action={
-            <PanelIconBtn label="Add window" icon={<Plus size={11} strokeWidth={1.5} />} onClick={onAddWindow} />
+            <RowAction
+              icon={<Plus size={11} strokeWidth={1.6} />}
+              label="Add window"
+              onClick={onAddWindow}
+            />
           }
         >
           {windows.length === 0 ? (
-            <EmptyHint>No windows yet</EmptyHint>
+            <EmptyHint>No windows</EmptyHint>
           ) : (
             windows.map((win) => (
-              <Row
+              <ItemRow
                 key={win.id}
                 icon={RectangleHorizontal}
                 label={win.name}
@@ -224,23 +211,27 @@ export function ObjectsPanel({
         </ListSection>
 
         <ListSection
-          title="Wall segments"
+          label="Wall cuts"
           count={customSegments.length}
           action={
             customSegments.length > 0 ? (
-              <PanelIconBtn label="Reset cuts" icon={<RotateCcw size={11} strokeWidth={1.5} />} onClick={onResetWallSegments} />
+              <RowAction
+                icon={<RotateCcw size={11} strokeWidth={1.6} />}
+                label="Reset all cuts"
+                onClick={onResetWallSegments}
+              />
             ) : null
           }
         >
           {customSegments.length === 0 ? (
-            <EmptyHint>No cuts yet — use the scissors tool</EmptyHint>
+            <EmptyHint>No cuts</EmptyHint>
           ) : (
             customSegments.map(({ wall, segment }) => (
-              <Row
+              <ItemRow
                 key={`${wall}-${segment.id}`}
                 icon={Scissors}
-                label={`${wallLabel(wall)} segment`}
-                meta={`${(segment.start * 100).toFixed(0)}% – ${(segment.end * 100).toFixed(0)}%`}
+                label={`${wallLabel(wall)} cut`}
+                meta={`${(segment.start * 100).toFixed(0)}–${(segment.end * 100).toFixed(0)}%`}
                 selected={selected?.type === "wall-segment" && selected.id === segment.id}
                 onSelect={() => onSelect({ type: "wall-segment", wall, id: segment.id })}
                 onRemove={() => onRemoveWallSegment(wall, segment.id)}
@@ -250,9 +241,9 @@ export function ObjectsPanel({
         </ListSection>
 
         {shapes.length > 0 ? (
-          <ListSection title="Shapes" count={shapes.length}>
+          <ListSection label="Shapes" count={shapes.length}>
             {shapes.map((shape) => (
-              <Row
+              <ItemRow
                 key={shape.id}
                 icon={Cuboid}
                 label={shape.name}
@@ -265,9 +256,9 @@ export function ObjectsPanel({
         ) : null}
 
         {cameras.length > 0 ? (
-          <ListSection title="Cameras" count={cameras.length}>
+          <ListSection label="Cameras" count={cameras.length}>
             {cameras.map((camera) => (
-              <Row
+              <ItemRow
                 key={camera.id}
                 icon={Camera}
                 label={camera.name}
@@ -282,19 +273,11 @@ export function ObjectsPanel({
   );
 }
 
-function PanelHeader({
-  title,
-  icon: Icon,
-  onClose,
-}: {
-  title: string;
-  icon: ComponentType<{ size?: number; strokeWidth?: number; color?: string }>;
-  onClose: () => void;
-}) {
+function PanelHeader({ title, onClose }: { title: string; onClose: () => void }) {
   return (
     <div
       style={{
-        height: 44,
+        height: 40,
         padding: "0 12px",
         display: "flex",
         alignItems: "center",
@@ -303,94 +286,88 @@ function PanelHeader({
         flexShrink: 0,
       }}
     >
-      <Icon size={13} strokeWidth={1.5} color="var(--accent-text)" />
+      <Box size={12} strokeWidth={1.6} color="var(--accent-text)" />
       <span
         style={{
-          fontSize: 13,
+          fontSize: 12,
           fontWeight: 500,
           color: "var(--text-bright)",
-          letterSpacing: "-0.01em",
-          fontFamily: "var(--font-ui)",
+          letterSpacing: "-0.005em",
           flex: 1,
-          whiteSpace: "nowrap",
         }}
       >
         {title}
       </span>
-      <PanelIconBtn label="Collapse panel" icon={<Minus size={11} strokeWidth={1.5} />} onClick={onClose} />
+      <RowAction icon={<Minus size={11} strokeWidth={1.6} />} label="Collapse panel" onClick={onClose} />
     </div>
   );
 }
 
-function ToolSection({ title, children }: { title: string; children: ReactNode }) {
+function ToolSection({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div style={{ padding: "10px 10px 6px" }}>
-      <SectionLabel>{title}</SectionLabel>
+    <div style={{ padding: "0 12px 12px" }}>
+      <SectionLabel>{label}</SectionLabel>
       {children}
     </div>
   );
 }
 
 function ListSection({
-  title,
+  label,
   count,
   action,
   children,
 }: {
-  title: string;
+  label: string;
   count: number;
   action?: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <div>
-      <div
-        style={{
-          padding: "0 12px",
-          height: 28,
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          borderTop: "1px solid var(--border-dim)",
-          borderBottom: "1px solid var(--border-dim)",
-        }}
-      >
+    <div style={{ padding: "10px 12px 4px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, height: 18, marginBottom: 4 }}>
+        <SectionLabel inline>{label}</SectionLabel>
         <span
           style={{
-            fontSize: 10,
-            fontWeight: 400,
-            color: "var(--text-primary)",
-            letterSpacing: "0.08em",
-            textTransform: "uppercase",
-            flex: 1,
-            fontFamily: "var(--font-ui)",
-          }}
-        >
-          {title}
-        </span>
-        <span
-          style={{
-            fontSize: 10,
-            fontWeight: 500,
-            background: "var(--accent-dim)",
-            color: "var(--accent-text)",
-            padding: "1px 6px",
-            borderRadius: 3,
-            border: "1px solid var(--accent-border)",
             fontFamily: "var(--font-mono)",
-            lineHeight: 1.5,
+            fontSize: 10,
+            color: "var(--text-secondary)",
+            letterSpacing: 0,
           }}
         >
-          {count}
+          {count.toString().padStart(2, "0")}
         </span>
+        <div style={{ flex: 1 }} />
         {action}
       </div>
-      <div style={{ padding: "4px 6px" }}>{children}</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>{children}</div>
     </div>
   );
 }
 
-function ToolGrid({
+function SectionLabel({ children, inline }: { children: ReactNode; inline?: boolean }) {
+  return (
+    <div
+      style={{
+        fontSize: 9,
+        fontWeight: 500,
+        color: "var(--text-secondary)",
+        letterSpacing: "0.14em",
+        textTransform: "uppercase",
+        marginBottom: inline ? 0 : 8,
+        lineHeight: 1,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function Divider() {
+  return <div style={{ height: 1, background: "var(--border-dim)", margin: "2px 12px 8px" }} />;
+}
+
+function ToolRow({
   tools,
   tool,
   onToolChange,
@@ -400,7 +377,16 @@ function ToolGrid({
   onToolChange: (tool: ToolMode) => void;
 }) {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 4 }}>
+    <div
+      style={{
+        display: "flex",
+        gap: 4,
+        padding: 3,
+        background: "#101216",
+        border: "1px solid var(--border-dim)",
+        borderRadius: 5,
+      }}
+    >
       {tools.map(({ id, label, icon }) => (
         <ToolButton
           key={id}
@@ -436,15 +422,73 @@ function ToolButton({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        height: 30,
-        background: active
-          ? "var(--accent-dim)"
-          : hovered
-          ? "var(--surface-overlay)"
-          : "var(--surface-input)",
+        flex: 1,
+        height: 26,
+        background: active ? "var(--accent-dim)" : hovered ? "var(--surface-overlay)" : "transparent",
+        border: "none",
+        borderRadius: 3,
+        color: active ? "var(--accent-text)" : hovered ? "var(--text-bright)" : "var(--text-primary)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        cursor: "pointer",
+        transition: "background 100ms, color 100ms",
+      }}
+    >
+      <Icon size={13} strokeWidth={1.6} />
+    </button>
+  );
+}
+
+function ShapePicker({
+  activeKind,
+  onChange,
+}: {
+  activeKind: ShapeKind;
+  onChange: (kind: ShapeKind) => void;
+}) {
+  return (
+    <div style={{ display: "flex", gap: 4, marginTop: 6 }}>
+      {SHAPE_OPTIONS.map(({ kind, label, icon: Icon }) => {
+        const active = activeKind === kind;
+        return (
+          <ShapeButton key={kind} label={label} active={active} onClick={() => onChange(kind)}>
+            <Icon size={12} strokeWidth={1.6} />
+          </ShapeButton>
+        );
+      })}
+    </div>
+  );
+}
+
+function ShapeButton({
+  label,
+  active,
+  onClick,
+  children,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-pressed={active}
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        flex: 1,
+        height: 24,
+        background: active ? "var(--accent-dim)" : hovered ? "var(--surface-overlay)" : "transparent",
         border: `1px solid ${active ? "var(--accent-border)" : "var(--border-dim)"}`,
-        borderRadius: 5,
-        color: active ? "var(--accent-text)" : hovered ? "var(--text-primary)" : "var(--text-secondary)",
+        borderRadius: 3,
+        color: active ? "var(--accent-text)" : hovered ? "var(--text-bright)" : "var(--text-primary)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -452,12 +496,12 @@ function ToolButton({
         transition: "background 100ms, color 100ms, border-color 100ms",
       }}
     >
-      <Icon size={14} strokeWidth={1.5} />
+      {children}
     </button>
   );
 }
 
-function Row({
+function ItemRow({
   icon: Icon,
   label,
   meta,
@@ -482,24 +526,20 @@ function Row({
         display: "flex",
         alignItems: "center",
         gap: 8,
-        padding: "6px 8px",
-        borderRadius: 4,
+        padding: "5px 8px",
+        borderRadius: 3,
         cursor: "pointer",
-        background: selected
-          ? "var(--accent-dim)"
-          : hovered
-          ? "var(--surface-overlay)"
-          : "transparent",
+        background: selected ? "var(--accent-dim)" : hovered ? "var(--surface-overlay)" : "transparent",
         color: selected ? "var(--accent-text)" : "var(--text-primary)",
-        transition: "background 100ms",
+        transition: "background 100ms, color 100ms",
+        height: 26,
       }}
     >
-      <Icon size={13} strokeWidth={1.5} />
+      <Icon size={12} strokeWidth={1.6} />
       <span
         style={{
           flex: 1,
           fontSize: 12,
-          fontFamily: "var(--font-ui)",
           whiteSpace: "nowrap",
           overflow: "hidden",
           textOverflow: "ellipsis",
@@ -513,25 +553,26 @@ function Row({
             fontSize: 10,
             color: "var(--text-secondary)",
             fontFamily: "var(--font-mono)",
-            textTransform: "uppercase",
+            letterSpacing: "0.02em",
           }}
         >
           {meta}
         </span>
       ) : null}
-      {onRemove ? (
+      {onRemove && hovered ? (
         <button
           type="button"
           aria-label="Remove"
+          title="Remove"
           onClick={(event) => {
             event.stopPropagation();
             onRemove();
           }}
           style={{
-            width: 20,
-            height: 20,
+            width: 18,
+            height: 18,
             border: "none",
-            borderRadius: 4,
+            borderRadius: 3,
             background: "transparent",
             color: "var(--text-secondary)",
             cursor: "pointer",
@@ -540,20 +581,20 @@ function Row({
             justifyContent: "center",
           }}
         >
-          <Trash2 size={11} strokeWidth={1.5} />
+          <Trash2 size={11} strokeWidth={1.6} />
         </button>
       ) : null}
     </div>
   );
 }
 
-function PanelIconBtn({
-  label,
+function RowAction({
   icon,
+  label,
   onClick,
 }: {
-  label: string;
   icon: ReactNode;
+  label: string;
   onClick?: () => void;
 }) {
   const [hovered, setHovered] = useState(false);
@@ -566,12 +607,12 @@ function PanelIconBtn({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        width: 22,
-        height: 22,
-        borderRadius: 4,
+        width: 20,
+        height: 20,
+        borderRadius: 3,
         border: "none",
         background: hovered ? "var(--surface-overlay)" : "transparent",
-        color: hovered ? "var(--text-primary)" : "var(--text-secondary)",
+        color: hovered ? "var(--text-bright)" : "var(--text-secondary)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -584,55 +625,17 @@ function PanelIconBtn({
   );
 }
 
-function SectionLabel({ children }: { children: ReactNode }) {
-  return (
-    <div
-      style={{
-        fontSize: 10,
-        fontWeight: 400,
-        color: "var(--text-secondary)",
-        letterSpacing: "0.08em",
-        textTransform: "uppercase",
-        marginBottom: 6,
-        fontFamily: "var(--font-ui)",
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
-function Hint({ children }: { children: ReactNode }) {
-  return (
-    <div
-      style={{
-        marginTop: 8,
-        fontSize: 11,
-        color: "var(--text-secondary)",
-        lineHeight: 1.45,
-        fontFamily: "var(--font-ui)",
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
 function EmptyHint({ children }: { children: ReactNode }) {
   return (
     <div
       style={{
-        padding: "10px 8px",
+        padding: "4px 8px",
         fontSize: 11,
-        color: "var(--text-secondary)",
-        fontFamily: "var(--font-ui)",
+        color: "var(--text-ghost)",
+        fontStyle: "normal",
       }}
     >
       {children}
     </div>
   );
-}
-
-function wallLabel(wall: WallId): string {
-  return wall.charAt(0).toUpperCase() + wall.slice(1);
 }
