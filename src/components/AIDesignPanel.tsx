@@ -1,30 +1,22 @@
-import { Globe2, Loader2, Lock, RotateCw, Sparkles, WandSparkles, XCircle } from "lucide-react";
-import type { MarbleResult, ProjectVisibility, WorkflowStepId } from "../state/types";
+import { Loader2, RotateCw, Sparkles, WandSparkles, XCircle } from "lucide-react";
+import type { MarbleResult } from "../state/types";
 
 type AIDesignPanelProps = {
   prompt: string;
   marble: MarbleResult;
-  workflowStep?: WorkflowStepId;
-  visibility?: ProjectVisibility;
   onPromptChange: (prompt: string) => void;
   onGenerate: () => void;
   onCancelRun: () => void;
   onLoadExample: () => void;
-  onWorkflowStepChange?: (workflowStep: WorkflowStepId) => void;
-  onVisibilityChange?: (visibility: ProjectVisibility) => void;
 };
 
 export function AIDesignPanel({
   prompt,
   marble,
-  workflowStep = "world",
-  visibility = "private",
   onPromptChange,
   onGenerate,
   onCancelRun,
   onLoadExample,
-  onWorkflowStepChange,
-  onVisibilityChange,
 }: AIDesignPanelProps) {
   const busy = marble.status === "uploading" || marble.status === "generating";
   const hasResult = marble.status === "complete" && Boolean(marble.payload);
@@ -32,23 +24,6 @@ export function AIDesignPanel({
 
   return (
     <div className="grid min-h-0 gap-2 p-2">
-      <div className="grid grid-cols-4 rounded-md border border-[var(--color-border)] bg-[var(--color-inset)] p-0.5">
-        {(["chisel", "panorama", "draft", "world"] as WorkflowStepId[]).map((step) => (
-          <button
-            key={step}
-            type="button"
-            onClick={() => onWorkflowStepChange?.(step)}
-            aria-pressed={workflowStep === step}
-            className={`h-7 rounded-[5px] px-2 text-[11px] font-semibold capitalize transition-colors ${
-              workflowStep === step
-                ? "bg-[var(--color-accent-soft)] text-[var(--color-accent)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--color-accent)_28%,transparent)]"
-                : "text-[var(--color-text-muted)] hover:bg-[var(--color-surface)] hover:text-[var(--color-text-primary)]"
-            }`}
-          >
-            {step}
-          </button>
-        ))}
-      </div>
       <div className="flex min-h-0 flex-col gap-1.5">
         <label className="sr-only" htmlFor="style-prompt">
           Final room style prompt
@@ -61,7 +36,7 @@ export function AIDesignPanel({
           rows={2}
           className="min-h-[3.75rem] resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-inset)] px-2.5 py-2 text-[13px] leading-5 text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-subtle)] focus:border-[var(--color-accent)] focus:ring-2 focus:ring-[var(--color-focus)]"
         />
-        <div className="grid gap-1.5 sm:grid-cols-[minmax(9rem,1fr)_auto_auto_auto]">
+        <div className="grid gap-1.5 sm:grid-cols-[minmax(9rem,1fr)_auto_auto]">
           <button
             type="button"
             onClick={onGenerate}
@@ -88,14 +63,6 @@ export function AIDesignPanel({
           >
             <WandSparkles className="size-3.5" />
             Sample
-          </button>
-          <button
-            type="button"
-            onClick={() => onVisibilityChange?.(visibility === "private" ? "public" : "private")}
-            className="flex h-8 items-center justify-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 text-xs font-semibold capitalize text-[var(--color-text-primary)] hover:bg-[var(--color-inset)]"
-          >
-            {visibility === "private" ? <Lock className="size-3.5" /> : <Globe2 className="size-3.5" />}
-            {visibility}
           </button>
         </div>
       </div>

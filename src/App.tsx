@@ -123,7 +123,7 @@ export default function App() {
       shapes: state.customShapes,
       projectTitle: state.projectTitle,
       visibility: state.visibility,
-      workflowStep: state.workflowStep,
+      workflowStep: "world",
       templateId: state.selectedTemplateId,
       panoramaOpacity: state.panoramaOpacity,
       stylePrompt: state.stylePrompt,
@@ -329,14 +329,10 @@ export default function App() {
           <AIDesignPanel
             prompt={state.stylePrompt}
             marble={state.marble}
-            workflowStep={state.workflowStep}
-            visibility={state.visibility}
             onPromptChange={(stylePrompt) => setState((current) => ({ ...current, stylePrompt }))}
             onGenerate={handleGenerateFinalRoom}
             onCancelRun={handleCancelRun}
             onLoadExample={loadExampleSplat}
-            onWorkflowStepChange={(workflowStep) => setState((current) => ({ ...current, workflowStep }))}
-            onVisibilityChange={(visibility) => setState((current) => ({ ...current, visibility }))}
           />
         }
       />
