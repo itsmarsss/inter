@@ -3298,8 +3298,6 @@ function wallOrientation(wall: WallId): { rotationY: number; normalSign: number 
   }
 }
 
-const OPENING_INSET = 0.24;
-
 function segmentDisplacementAtOffset(
   room: RoomBounds,
   wall: WallId,
@@ -3320,15 +3318,14 @@ function openingWorldPos(
   segments?: WallSegment[],
 ): Vec3 {
   const center = wallPosition(room, wall);
-  const { normalSign } = wallOrientation(wall);
   const displacement = segmentDisplacementAtOffset(room, wall, segments, offset);
   const sign = wallSurfaceSign(wall);
   if (wall === "north" || wall === "south") {
     const cx = (room.minX + room.maxX) / 2;
-    return [cx + offset, y, center[2] + sign * displacement + normalSign * OPENING_INSET];
+    return [cx + offset, y, center[2] + sign * displacement];
   }
   const cz = (room.minZ + room.maxZ) / 2;
-  return [center[0] + sign * displacement + normalSign * OPENING_INSET, y, cz + offset];
+  return [center[0] + sign * displacement, y, cz + offset];
 }
 
 type DoorNodeProps = {
@@ -3349,6 +3346,15 @@ function DoorNode({ door, room, wallSegments, selected, hovered, opacity, onPoin
   const frameColor = fadeSceneColor(SCENE_COLORS.doorFrame, opacity);
   const panelColor = fadeSceneColor(selected ? SCENE_COLORS.wallSelected : SCENE_COLORS.doorPanel, opacity);
   const highlight = selected || hovered;
+  const panelDepth = WALL_THICKNESS + 0.04;
+  const frameDepth = WALL_THICKNESS + 0.06;
+  const knobOffset = panelDepth / 2 + 0.04;
+
+  const fullyVisible = opacity >= 0.99;
+  const panelAlpha = (selected ? 0.95 : hovered ? 0.9 : 0.85) * opacity;
+  const panelOpaque = fullyVisible && panelAlpha >= 0.99;
+  const frameAlpha = 0.95 * opacity;
+  const frameOpaque = fullyVisible && frameAlpha >= 0.99;
 
   return (
     <group
@@ -3358,33 +3364,62 @@ function DoorNode({ door, room, wallSegments, selected, hovered, opacity, onPoin
       onPointerOut={onPointerOut}
       onPointerDown={onPointerDown}
     >
-      <mesh>
-        <boxGeometry args={[door.width, door.height, 0.06]} />
+      <mesh renderOrder={1}>
+        <boxGeometry args={[door.width, door.height, panelDepth]} />
         <meshStandardMaterial
           color={panelColor}
           roughness={0.6}
-          transparent
-          opacity={(selected ? 0.95 : hovered ? 0.9 : 0.85) * opacity}
+          transparent={!panelOpaque}
+          opacity={panelAlpha}
           emissive={highlight ? SCENE_COLORS.wallSelected : "#000000"}
           emissiveIntensity={selected ? 0.25 : hovered ? 0.12 : 0}
-          depthWrite={opacity >= 0.98}
+          depthWrite={panelOpaque || panelAlpha >= 0.98}
         />
       </mesh>
-      <mesh position={[-door.width / 2, 0, 0.01]}>
-        <boxGeometry args={[0.06, door.height, 0.1]} />
-        <meshStandardMaterial color={frameColor} transparent opacity={0.95 * opacity} depthWrite={false} />
+      <mesh position={[-door.width / 2, 0, 0]} renderOrder={1}>
+        <boxGeometry args={[0.06, door.height, frameDepth]} />
+        <meshStandardMaterial
+          color={frameColor}
+          transparent={!frameOpaque}
+          opacity={frameAlpha}
+          depthWrite={frameOpaque}
+        />
       </mesh>
-      <mesh position={[door.width / 2, 0, 0.01]}>
-        <boxGeometry args={[0.06, door.height, 0.1]} />
-        <meshStandardMaterial color={frameColor} transparent opacity={0.95 * opacity} depthWrite={false} />
+      <mesh position={[door.width / 2, 0, 0]} renderOrder={1}>
+        <boxGeometry args={[0.06, door.height, frameDepth]} />
+        <meshStandardMaterial
+          color={frameColor}
+          transparent={!frameOpaque}
+          opacity={frameAlpha}
+          depthWrite={frameOpaque}
+        />
       </mesh>
-      <mesh position={[0, door.height / 2, 0.01]}>
-        <boxGeometry args={[door.width + 0.12, 0.06, 0.1]} />
-        <meshStandardMaterial color={frameColor} transparent opacity={0.95 * opacity} depthWrite={false} />
+      <mesh position={[0, door.height / 2, 0]} renderOrder={1}>
+        <boxGeometry args={[door.width + 0.12, 0.06, frameDepth]} />
+        <meshStandardMaterial
+          color={frameColor}
+          transparent={!frameOpaque}
+          opacity={frameAlpha}
+          depthWrite={frameOpaque}
+        />
       </mesh>
-      <mesh position={[door.width * 0.32, 0, 0.045]}>
+      <mesh position={[door.width * 0.32, 0, knobOffset]} renderOrder={2}>
         <sphereGeometry args={[0.04, 16, 10]} />
-        <meshStandardMaterial color={SCENE_COLORS.warmLight} transparent opacity={0.95 * opacity} depthWrite={false} />
+        <meshStandardMaterial
+          color={SCENE_COLORS.warmLight}
+          transparent={!frameOpaque}
+          opacity={frameAlpha}
+          depthWrite={frameOpaque}
+        />
+      </mesh>
+      <mesh position={[door.width * 0.32, 0, -knobOffset]} renderOrder={2}>
+        <sphereGeometry args={[0.04, 16, 10]} />
+        <meshStandardMaterial
+          color={SCENE_COLORS.warmLight}
+          transparent={!frameOpaque}
+          opacity={frameAlpha}
+          depthWrite={frameOpaque}
+        />
       </mesh>
     </group>
   );
@@ -3409,6 +3444,13 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
   const frameColor = fadeSceneColor(SCENE_COLORS.windowFrame, opacity);
   const glassColor = fadeSceneColor(selected ? SCENE_COLORS.wallSelected : SCENE_COLORS.windowGlass, opacity);
   const highlight = selected || hovered;
+  const glassDepth = WALL_THICKNESS + 0.04;
+  const frameDepth = WALL_THICKNESS + 0.06;
+  const fullyVisible = opacity >= 0.99;
+  const frameAlpha = 0.95 * opacity;
+  const frameOpaque = fullyVisible && frameAlpha >= 0.99;
+  const mullionAlpha = 0.9 * opacity;
+  const mullionOpaque = fullyVisible && mullionAlpha >= 0.99;
 
   return (
     <group
@@ -3418,8 +3460,8 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
       onPointerOut={onPointerOut}
       onPointerDown={onPointerDown}
     >
-      <mesh>
-        <boxGeometry args={[window.width, window.height, 0.05]} />
+      <mesh renderOrder={2}>
+        <boxGeometry args={[window.width, window.height, glassDepth]} />
         <meshStandardMaterial
           color={glassColor}
           roughness={0.18}
@@ -3431,36 +3473,66 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
           depthWrite={false}
         />
       </mesh>
-      <mesh position={[-window.width / 2, 0, 0.01]}>
-        <boxGeometry args={[0.05, window.height, 0.09]} />
-        <meshStandardMaterial color={frameColor} transparent opacity={0.95 * opacity} depthWrite={false} />
+      <mesh position={[-window.width / 2, 0, 0]} renderOrder={1}>
+        <boxGeometry args={[0.05, window.height, frameDepth]} />
+        <meshStandardMaterial
+          color={frameColor}
+          transparent={!frameOpaque}
+          opacity={frameAlpha}
+          depthWrite={frameOpaque}
+        />
       </mesh>
-      <mesh position={[window.width / 2, 0, 0.01]}>
-        <boxGeometry args={[0.05, window.height, 0.09]} />
-        <meshStandardMaterial color={frameColor} transparent opacity={0.95 * opacity} depthWrite={false} />
+      <mesh position={[window.width / 2, 0, 0]} renderOrder={1}>
+        <boxGeometry args={[0.05, window.height, frameDepth]} />
+        <meshStandardMaterial
+          color={frameColor}
+          transparent={!frameOpaque}
+          opacity={frameAlpha}
+          depthWrite={frameOpaque}
+        />
       </mesh>
-      <mesh position={[0, window.height / 2, 0.01]}>
-        <boxGeometry args={[window.width + 0.1, 0.05, 0.09]} />
-        <meshStandardMaterial color={frameColor} transparent opacity={0.95 * opacity} depthWrite={false} />
+      <mesh position={[0, window.height / 2, 0]} renderOrder={1}>
+        <boxGeometry args={[window.width + 0.1, 0.05, frameDepth]} />
+        <meshStandardMaterial
+          color={frameColor}
+          transparent={!frameOpaque}
+          opacity={frameAlpha}
+          depthWrite={frameOpaque}
+        />
       </mesh>
-      <mesh position={[0, -window.height / 2, 0.01]}>
-        <boxGeometry args={[window.width + 0.1, 0.05, 0.09]} />
-        <meshStandardMaterial color={frameColor} transparent opacity={0.95 * opacity} depthWrite={false} />
+      <mesh position={[0, -window.height / 2, 0]} renderOrder={1}>
+        <boxGeometry args={[window.width + 0.1, 0.05, frameDepth]} />
+        <meshStandardMaterial
+          color={frameColor}
+          transparent={!frameOpaque}
+          opacity={frameAlpha}
+          depthWrite={frameOpaque}
+        />
       </mesh>
-      <mesh position={[0, 0, 0.01]}>
-        <boxGeometry args={[0.04, window.height, 0.08]} />
-        <meshStandardMaterial color={frameColor} transparent opacity={0.9 * opacity} depthWrite={false} />
+      <mesh position={[0, 0, 0]} renderOrder={1}>
+        <boxGeometry args={[0.04, window.height, frameDepth]} />
+        <meshStandardMaterial
+          color={frameColor}
+          transparent={!mullionOpaque}
+          opacity={mullionAlpha}
+          depthWrite={mullionOpaque}
+        />
       </mesh>
-      <mesh position={[0, 0, 0.01]}>
-        <boxGeometry args={[window.width, 0.04, 0.08]} />
-        <meshStandardMaterial color={frameColor} transparent opacity={0.9 * opacity} depthWrite={false} />
+      <mesh position={[0, 0, 0]} renderOrder={1}>
+        <boxGeometry args={[window.width, 0.04, frameDepth]} />
+        <meshStandardMaterial
+          color={frameColor}
+          transparent={!mullionOpaque}
+          opacity={mullionAlpha}
+          depthWrite={mullionOpaque}
+        />
       </mesh>
     </group>
   );
 }
 
 const WALL_THICKNESS = 0.12;
-const WALL_HIT_PAD = 0.18;
+const WALL_HIT_PAD = 0.1;
 
 type SegmentMeshProps = {
   wall: WallId;
@@ -3505,7 +3577,7 @@ function SegmentMesh({
       onPointerOver={onPointerOver}
       onPointerOut={onPointerOut}
     >
-      <mesh castShadow receiveShadow onPointerDown={onPointerDown}>
+      <mesh castShadow receiveShadow onPointerDown={onPointerDown} renderOrder={0}>
         <boxGeometry args={visibleSize} />
         <meshStandardMaterial
           color={selected ? SCENE_COLORS.wallSelected : SCENE_COLORS.wall}
