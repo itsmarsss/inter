@@ -1,19 +1,23 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
+import { Bebas_Neue, IBM_Plex_Mono } from "next/font/google";
 import "../src/styles/index.css";
 
-const plexSans = IBM_Plex_Sans({
-  weight: ["300", "400", "500"],
-  subsets: ["latin"],
-  display: "swap",
-  variable: "--font-plex-sans",
-});
-
+// IBM Plex Mono — used for all chrome UI, labels, inputs, and numbers.
+// Pairs with Bebas Neue for an architectural, blueprint-y feel matching the
+// landing page.
 const plexMono = IBM_Plex_Mono({
   weight: ["400", "500"],
   subsets: ["latin"],
   display: "swap",
   variable: "--font-plex-mono",
+});
+
+// Bebas Neue — condensed architectural display for panel titles & callouts.
+const bebas = Bebas_Neue({
+  weight: ["400"],
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-bebas",
 });
 
 export const metadata: Metadata = {
@@ -23,7 +27,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${plexSans.variable} ${plexMono.variable}`}>
+    <html lang="en" className={`${plexMono.variable} ${bebas.variable}`}>
       <body>{children}</body>
     </html>
   );

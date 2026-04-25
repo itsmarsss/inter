@@ -161,6 +161,17 @@ type ShapeRotateSession = {
   previousControlsEnabled: boolean;
 };
 
+type InstanceRotateSession = {
+  instanceId: string;
+  pointerId: number;
+  startRotation: Vec3;
+  startAngle: number;
+  latestClientX: number;
+  latestClientY: number;
+  rafId: number | null;
+  previousControlsEnabled: boolean;
+};
+
 type OpeningKind = "door" | "window";
 
 type OpeningDragSession = {
@@ -465,7 +476,6 @@ export function SceneView(props: SceneViewProps) {
           setProjector={(projector) => (projectorRef.current = projector)}
         />
       </Canvas>
-      <ToolHintBanner tool={props.tool} />
       {wantsSplat && objectSplatControlsVisible ? (
         <div className="absolute right-3 bottom-12 flex flex-col gap-1 rounded-md border border-[var(--border-mid)] bg-[#16181d] px-2 py-1 text-xs shadow-[0_8px_24px_rgba(0,0,0,0.45)]">
           <div className="flex min-w-0 items-center gap-2">
@@ -580,6 +590,7 @@ function SceneContent({
   const objectDragRef = useRef<ObjectDragSession | null>(null);
   const shapeResizeRef = useRef<ShapeResizeSession | null>(null);
   const shapeRotateRef = useRef<ShapeRotateSession | null>(null);
+  const instanceRotateRef = useRef<InstanceRotateSession | null>(null);
   const openingDragRef = useRef<OpeningDragSession | null>(null);
   const segmentDragRef = useRef<SegmentDisplacementSession | null>(null);
   const pointerScratchRef = useRef({
@@ -700,6 +711,7 @@ function SceneContent({
       if (
         shapeResizeRef.current ||
         shapeRotateRef.current ||
+        instanceRotateRef.current ||
         objectDragRef.current ||
         wallDragRef.current ||
         openingDragRef.current ||
@@ -1155,6 +1167,106 @@ function SceneContent({
     };
   }, [gl.domElement, projectPointerToFloor]);
 
+  // Drag-to-rotate for furniture instances via the base ring. Snaps to
+  // 15-degree increments around the world-Y (vertical) axis.
+  useEffect(() => {
+    const element = gl.domElement;
+    const SNAP_RADIANS = Math.PI / 12; // 15°
+
+    function applyInstanceRotate() {
+      const session = instanceRotateRef.current;
+      if (!session) return;
+
+      session.rafId = null;
+      const instance = instancesRef.current.find((item) => item.id === session.instanceId);
+      if (!instance) return;
+
+      const nextAngle = pointerAngleAroundPosition(
+        instance.position,
+        session.latestClientX,
+        session.latestClientY,
+        projectPointerToFloor,
+      );
+      if (nextAngle === null) return;
+
+      // Continuous Y-rotation following the pointer, then snap to 15° steps.
+      const continuous =
+        session.startRotation[1] - shortestAngleDelta(nextAngle, session.startAngle);
+      const snapped = Math.round(continuous / SNAP_RADIANS) * SNAP_RADIANS;
+      if (Math.abs(snapped - instance.rotation[1]) < 1e-4) return;
+
+      const nextRotation: Vec3 = [
+        session.startRotation[0],
+        snapped,
+        session.startRotation[2],
+      ];
+      onInstancesChangeRef.current(
+        instancesRef.current.map((item) =>
+          item.id === session.instanceId ? { ...item, rotation: nextRotation } : item,
+        ),
+      );
+    }
+
+    function scheduleInstanceRotateUpdate() {
+      const session = instanceRotateRef.current;
+      if (!session || session.rafId !== null) return;
+      session.rafId = window.requestAnimationFrame(applyInstanceRotate);
+    }
+
+    function endInstanceRotate(pointerId?: number) {
+      const session = instanceRotateRef.current;
+      if (!session || (pointerId !== undefined && session.pointerId !== pointerId)) return;
+
+      if (session.rafId !== null) {
+        window.cancelAnimationFrame(session.rafId);
+      }
+
+      try {
+        if (element.hasPointerCapture(session.pointerId)) {
+          element.releasePointerCapture(session.pointerId);
+        }
+      } catch {
+        // Pointer capture can already be gone after browser-level cancellation.
+      }
+
+      const controls = orbitControlsRef.current;
+      if (controls) {
+        controls.enabled = session.previousControlsEnabled;
+      }
+
+      instanceRotateRef.current = null;
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      const session = instanceRotateRef.current;
+      if (!session || session.pointerId !== event.pointerId) return;
+      session.latestClientX = event.clientX;
+      session.latestClientY = event.clientY;
+      scheduleInstanceRotateUpdate();
+    }
+
+    function handlePointerUp(event: PointerEvent) {
+      endInstanceRotate(event.pointerId);
+    }
+
+    function handleBlur() {
+      endInstanceRotate();
+    }
+
+    window.addEventListener("pointermove", handlePointerMove, { capture: true });
+    window.addEventListener("pointerup", handlePointerUp, { capture: true });
+    window.addEventListener("pointercancel", handlePointerUp, { capture: true });
+    window.addEventListener("blur", handleBlur);
+
+    return () => {
+      endInstanceRotate();
+      window.removeEventListener("pointermove", handlePointerMove, { capture: true });
+      window.removeEventListener("pointerup", handlePointerUp, { capture: true });
+      window.removeEventListener("pointercancel", handlePointerUp, { capture: true });
+      window.removeEventListener("blur", handleBlur);
+    };
+  }, [gl.domElement, projectPointerToFloor]);
+
   useEffect(() => {
     const element = gl.domElement;
 
@@ -1541,6 +1653,43 @@ function SceneContent({
     onSelect({ type: "shape", id: shape.id });
   }
 
+  function handleInstanceRotatePointerDown(instance: FurnitureInstance, event: ThreeEvent<PointerEvent>) {
+    if (viewMode !== "blockout") return;
+    if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
+
+    event.stopPropagation();
+    const startAngle = pointerAngleAroundPosition(
+      instance.position,
+      event.clientX,
+      event.clientY,
+      projectPointerToFloor,
+    );
+    if (startAngle === null) return;
+
+    const controls = orbitControlsRef.current;
+    instanceRotateRef.current = {
+      instanceId: instance.id,
+      pointerId: event.pointerId,
+      startRotation: [...instance.rotation] as Vec3,
+      startAngle,
+      latestClientX: event.clientX,
+      latestClientY: event.clientY,
+      rafId: null,
+      previousControlsEnabled: controls?.enabled ?? true,
+    };
+
+    objectDragRef.current = null;
+    if (controls) controls.enabled = false;
+
+    try {
+      gl.domElement.setPointerCapture(event.pointerId);
+    } catch {
+      // Some browsers can reject capture if the native pointer sequence has already ended.
+    }
+
+    onSelect({ type: "furniture", id: instance.id });
+  }
+
   function handleShapeRotatePointerDown(shape: CustomShape, event: ThreeEvent<PointerEvent>) {
     if (viewMode !== "blockout") return;
     if (tool !== "select" && tool !== "move" && tool !== "rotate") return;
@@ -1742,6 +1891,7 @@ function SceneContent({
               onDragStart={(event) =>
                 handleObjectPointerDown({ type: "furniture", id: instance.id }, instance.position, event)
               }
+              onRotateStart={(event) => handleInstanceRotatePointerDown(instance, event)}
               onTransformActiveChange={handleTransformActiveChange}
               onChange={updateInstance}
             />
@@ -2166,9 +2316,19 @@ function shapeLocalPointerValue(
 }
 
 function shapePointerAngle(shape: CustomShape, clientX: number, clientY: number, projectPointerToFloor: Projector) {
+  return pointerAngleAroundPosition(shape.position, clientX, clientY, projectPointerToFloor);
+}
+
+/** Angle (radians) from `position` to the projected pointer on the floor plane. */
+function pointerAngleAroundPosition(
+  position: Vec3,
+  clientX: number,
+  clientY: number,
+  projectPointerToFloor: Projector,
+) {
   const point = projectPointerToFloor(clientX, clientY);
   if (!point) return null;
-  return Math.atan2(point[2] - shape.position[2], point[0] - shape.position[0]);
+  return Math.atan2(point[2] - position[2], point[0] - position[0]);
 }
 
 function shortestAngleDelta(nextAngle: number, startAngle: number) {
@@ -3775,6 +3935,7 @@ type FurnitureNodeProps = {
   opacity: number;
   onSelect: () => void;
   onDragStart: (event: ThreeEvent<PointerEvent>) => void;
+  onRotateStart: (event: ThreeEvent<PointerEvent>) => void;
   onTransformActiveChange: (active: boolean) => void;
   onChange: (instance: FurnitureInstance) => void;
 };
@@ -3789,6 +3950,7 @@ function FurnitureNode({
   opacity,
   onSelect,
   onDragStart,
+  onRotateStart,
   onTransformActiveChange,
   onChange,
 }: FurnitureNodeProps) {
@@ -3844,6 +4006,7 @@ function FurnitureNode({
           <PrimitiveFurniture primitive={asset?.primitive ?? "sofa"} selected={selected} hovered={hovered} opacity={opacity} />
         )}
       </Suspense>
+      {selected ? <FurnitureRotateRing onRotateStart={onRotateStart} /> : null}
     </group>
   );
 
@@ -4381,21 +4544,36 @@ function SelectionRing({ opacity = 1, selected = true }: { opacity?: number; sel
   );
 }
 
-function ToolHintBanner({ tool }: { tool: ToolMode }) {
-  const hint =
-    tool === "cut-wall"
-      ? "Click on a wall to slice it, then drag in the same motion to pull the new face in or out. Each cut produces an independent segment with a connector wall."
-      : tool === "add-door"
-        ? "Click on any wall to place a new door. Switch to Select to drag it along the wall."
-        : tool === "add-window"
-          ? "Click on a wall (at any height) to place a window. Switch to Select to slide or raise it."
-          : null;
-
-  if (!hint) return null;
-
+/**
+ * Interactive grab ring at the base of a selected furniture instance.
+ * Overlays the visual `SelectionRing` and dispatches the rotate gesture.
+ * Slightly thicker than the visual ring so it's a comfortable hit target.
+ */
+function FurnitureRotateRing({
+  onRotateStart,
+}: {
+  onRotateStart: (event: ThreeEvent<PointerEvent>) => void;
+}) {
   return (
-    <div className="pointer-events-none absolute inset-x-4 bottom-4 mx-auto max-w-md rounded-md border border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-overlay)_92%,transparent)] px-3 py-2 text-center text-xs font-medium text-[var(--color-accent-hover)] shadow-[var(--shadow-float)] [backdrop-filter:var(--panel-blur)]">
-      {hint}
-    </div>
+    <mesh
+      userData={{ captureHidden: true }}
+      rotation={[-Math.PI / 2, 0, 0]}
+      position={[0, 0.026, 0]}
+      onPointerDown={(event) => {
+        event.stopPropagation();
+        onRotateStart(event);
+      }}
+      onPointerOver={(event) => {
+        event.stopPropagation();
+        document.body.style.cursor = "grab";
+      }}
+      onPointerOut={() => {
+        document.body.style.cursor = "";
+      }}
+    >
+      {/* Wider than the visual ring (0.78–0.97 vs 0.85–0.9) for easier grab. */}
+      <ringGeometry args={[0.78, 0.97, 48]} />
+      <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+    </mesh>
   );
 }

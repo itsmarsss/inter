@@ -62,11 +62,13 @@ export function FurniturePanel({ open, assets, onGenerate, onUploadModel, onClos
         <Package size={13} strokeWidth={1.5} color="var(--accent-text)" />
         <span
           style={{
-            fontSize: 13,
-            fontWeight: 500,
+            fontSize: 17,
+            fontWeight: 400,
             color: "var(--text-bright)",
-            letterSpacing: "-0.01em",
-            fontFamily: "var(--font-ui)",
+            letterSpacing: "0.06em",
+            fontFamily: "var(--font-display)",
+            textTransform: "uppercase",
+            lineHeight: 1,
             flex: 1,
             whiteSpace: "nowrap",
           }}

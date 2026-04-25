@@ -58,6 +58,11 @@
   to { transform: rotate(360deg); }
 }
 
+@keyframes loader-sheen {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(220%); }
+}
+
 textarea.precision-textarea::placeholder {
   color: var(--text-ghost);
   font-style: italic;

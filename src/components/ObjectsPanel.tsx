@@ -289,10 +289,13 @@ function PanelHeader({ title, onClose }: { title: string; onClose: () => void })
       <Box size={12} strokeWidth={1.6} color="var(--accent-text)" />
       <span
         style={{
-          fontSize: 12,
-          fontWeight: 500,
+          fontSize: 17,
+          fontWeight: 400,
           color: "var(--text-bright)",
-          letterSpacing: "-0.005em",
+          letterSpacing: "0.06em",
+          fontFamily: "var(--font-display)",
+          textTransform: "uppercase",
+          lineHeight: 1,
           flex: 1,
         }}
       >

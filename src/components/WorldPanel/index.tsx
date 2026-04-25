@@ -42,10 +42,6 @@ export function WorldPanel({
       ? 1
       : 0;
   const progressPct = `${Math.round(progressFraction * 100)}%`;
-  const etaSeconds =
-    marble.status === "generating" && typeof marble.etaMs === "number"
-      ? Math.max(0, Math.ceil(marble.etaMs / 1000))
-      : null;
 
   return (
     <div
@@ -97,11 +93,13 @@ export function WorldPanel({
         <WandSparkles size={13} strokeWidth={1.5} color="var(--accent-text)" />
         <span
           style={{
-            fontSize: 13,
-            fontWeight: 500,
+            fontSize: 17,
+            fontWeight: 400,
             color: "var(--text-bright)",
-            letterSpacing: "-0.01em",
-            fontFamily: "var(--font-ui)",
+            letterSpacing: "0.06em",
+            fontFamily: "var(--font-display)",
+            textTransform: "uppercase",
+            lineHeight: 1,
             flex: 1,
             whiteSpace: "nowrap",
           }}
@@ -169,39 +167,36 @@ export function WorldPanel({
         />
       </div>
 
-      {/* Loader block — live progress, percent, and ETA while generating */}
+      {/* Loader — eyebrow label + thin accent bar (matches site aesthetic) */}
       {busy && !marble.error && (
-        <div style={{ padding: "10px 12px 0", flexShrink: 0 }}>
+        <div style={{ padding: "14px 12px 0", flexShrink: 0 }}>
           <div
             style={{
               display: "flex",
               alignItems: "baseline",
               justifyContent: "space-between",
-              marginBottom: 6,
+              marginBottom: 8,
             }}
           >
             <span
               style={{
-                fontSize: 11,
+                fontSize: 10,
+                fontWeight: 400,
                 color: "var(--text-secondary)",
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
                 fontFamily: "var(--font-ui)",
-                letterSpacing: "0.01em",
               }}
             >
-              {marble.status === "uploading"
-                ? "Packaging scene…"
-                : etaSeconds === null
-                ? "Generating world…"
-                : etaSeconds <= 1
-                ? "Finishing up…"
-                : `Generating world · ~${etaSeconds}s`}
+              {marble.status === "uploading" ? "Packaging" : "Generating"}
             </span>
             <span
               style={{
-                fontSize: 11,
+                fontSize: 10,
                 color: "var(--text-primary)",
                 fontFamily: "var(--font-mono)",
                 fontVariantNumeric: "tabular-nums",
+                letterSpacing: "0.04em",
               }}
             >
               {progressPct}
@@ -210,11 +205,9 @@ export function WorldPanel({
           <div
             style={{
               position: "relative",
-              height: 6,
-              borderRadius: 3,
+              height: 3,
               background: "var(--surface-input)",
               overflow: "hidden",
-              border: "1px solid var(--border-dim)",
             }}
           >
             <div
@@ -222,25 +215,26 @@ export function WorldPanel({
                 position: "absolute",
                 inset: 0,
                 width: progressPct,
-                background:
-                  "linear-gradient(90deg, var(--accent-dim) 0%, var(--accent) 60%, var(--accent) 100%)",
-                transition: "width 220ms cubic-bezier(0.4, 0, 0.2, 1)",
+                background: "var(--accent)",
+                transition: "width 320ms cubic-bezier(0.4, 0, 0.2, 1)",
+                overflow: "hidden",
               }}
-            />
-            {/* Subtle shimmer ribbon — purely cosmetic, anchored to bar end */}
-            <div
-              style={{
-                position: "absolute",
-                top: 0,
-                bottom: 0,
-                left: `calc(${progressPct} - 28px)`,
-                width: 28,
-                background:
-                  "linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.18) 50%, rgba(255,255,255,0) 100%)",
-                transition: "left 220ms cubic-bezier(0.4, 0, 0.2, 1)",
-                pointerEvents: "none",
-              }}
-            />
+            >
+              {/* Real animated sheen — communicates active work without ETA */}
+              <div
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  bottom: 0,
+                  left: 0,
+                  width: "40%",
+                  background:
+                    "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.55) 50%, transparent 100%)",
+                  animation: "loader-sheen 1.8s linear infinite",
+                  pointerEvents: "none",
+                }}
+              />
+            </div>
           </div>
         </div>
       )}
