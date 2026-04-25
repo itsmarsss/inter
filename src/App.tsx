@@ -247,8 +247,6 @@ export default function App() {
       furnitureInstances={state.furnitureInstances}
       room={state.room}
       onGenerateFurniture={handleGenerateFurniture}
-      panoramaOpacity={state.panoramaOpacity}
-      onPanoramaOpacityChange={(panoramaOpacity) => setState((current) => ({ ...current, panoramaOpacity }))}
       upload={state.upload}
       stylePrompt={state.stylePrompt}
       onStylePromptChange={(stylePrompt) => setState((current) => ({ ...current, stylePrompt }))}

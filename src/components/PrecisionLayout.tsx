@@ -7,7 +7,6 @@ import { FurniturePanel } from "./FurniturePanel";
 import { IconRail, type RailSection } from "./IconRail";
 import { MinimapPanel } from "./MinimapPanel";
 import { ModeBar, type ViewMode } from "./ModeBar";
-import { RefToggle } from "./RefToggle";
 import { Viewport } from "./Viewport";
 import { WorldPanel } from "./WorldPanel";
 
@@ -17,8 +16,6 @@ type PrecisionLayoutProps = {
   furnitureInstances: FurnitureInstance[];
   room: RoomBounds;
   onGenerateFurniture: (prompt: string) => void;
-  panoramaOpacity: number;
-  onPanoramaOpacityChange: (v: number) => void;
   upload: UploadStatus;
   stylePrompt: string;
   onStylePromptChange: (prompt: string) => void;
@@ -33,8 +30,6 @@ export function PrecisionLayout({
   furnitureInstances,
   room,
   onGenerateFurniture,
-  panoramaOpacity,
-  onPanoramaOpacityChange,
   upload,
   stylePrompt,
   onStylePromptChange,
@@ -107,8 +102,6 @@ export function PrecisionLayout({
         worldActive={activeSection === "world" && panelOpen}
         onOpenWorld={openWorld}
       />
-
-      <RefToggle opacity={panoramaOpacity} onChange={onPanoramaOpacityChange} />
 
       {/* Version badge */}
       <div
