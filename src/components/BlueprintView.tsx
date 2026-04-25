@@ -19,6 +19,7 @@ import {
   buildFloorPolygon,
   clampToRoom,
   clampWallOffset,
+  effectiveBoundsForRoom,
   findSegmentAtFraction,
   offsetToFraction,
   resizeRoomFromWall,
@@ -256,7 +257,8 @@ export function BlueprintView({
     const point = pointFromPointer(event.clientX, event.clientY);
     if (!point) return;
 
-    const next = transformObjectFromPointer(objectTransform, point.x, point.y, room);
+    const effectiveBounds = wallSegments ? effectiveBoundsForRoom(room, wallSegments) : room;
+    const next = transformObjectFromPointer(objectTransform, point.x, point.y, effectiveBounds);
 
     if (objectTransform.target.type === "furniture") {
       onInstancesChange(

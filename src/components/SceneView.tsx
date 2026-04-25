@@ -2,7 +2,7 @@ import { SplatEdit, SplatEditRgbaBlendMode, SplatEditSdf, SplatEditSdfType, Spla
 import { Canvas, type ThreeEvent, useFrame, useThree } from "@react-three/fiber";
 import { Grid, Html, OrbitControls, PerspectiveCamera, PointerLockControls, TransformControls, useGLTF } from "@react-three/drei";
 import { Camera, Footprints, Minus, SlidersHorizontal } from "lucide-react";
-import { Component, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Component, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl, PointerLockControls as PointerLockControlsImpl } from "three-stdlib";
 import {
@@ -16,6 +16,7 @@ import {
   createSceneCamera,
   createWindowOpening,
   cutWallAt,
+  effectiveBoundsForRoom,
   findSegmentAtFraction,
   isSegmentationDefault,
   offsetToFraction,
@@ -398,7 +399,7 @@ export function SceneView(props: SceneViewProps) {
     const position = projectorRef.current?.(event.clientX, event.clientY);
     if (!asset || !position) return;
 
-    const instance = createFurnitureInstance(asset, clampToRoom(position, props.room));
+    const instance = createFurnitureInstance(asset, clampToRoom(position, effectiveBoundsForRoom(props.room, props.wallSegments)));
     props.onInstancesChange([...props.instances, instance]);
     props.onSelect({ type: "furniture", id: instance.id });
   }
@@ -585,59 +586,59 @@ function SceneContent({
     registerSceneCapture(() => captureLayoutPano(scene, gl, roomRef.current));
   }, [gl, registerSceneCapture, scene]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     roomRef.current = room;
   }, [room]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     instancesRef.current = instances;
   }, [instances]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     shapesRef.current = shapes;
   }, [shapes]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     camerasRef.current = cameras;
   }, [cameras]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     doorsRef.current = doors;
   }, [doors]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     windowsRef.current = windows;
   }, [windows]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     wallSegmentsRef.current = wallSegments;
   }, [wallSegments]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     onRoomChangeRef.current = onRoomChange;
   }, [onRoomChange]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     onInstancesChangeRef.current = onInstancesChange;
   }, [onInstancesChange]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     onShapesChangeRef.current = onShapesChange;
   }, [onShapesChange]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     onCamerasChangeRef.current = onCamerasChange;
   }, [onCamerasChange]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     onDoorsChangeRef.current = onDoorsChange;
   }, [onDoorsChange]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     onWindowsChangeRef.current = onWindowsChange;
   }, [onWindowsChange]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     onWallSegmentsChangeRef.current = onWallSegmentsChange;
   }, [onWallSegmentsChange]);
 
@@ -892,7 +893,7 @@ function SceneContent({
           session.grabOffset[1],
           point[2] - session.grabOffset[2],
         ],
-        roomRef.current,
+        effectiveBoundsForRoom(roomRef.current, wallSegmentsRef.current),
       );
 
       if (session.target.type === "furniture") {
@@ -1371,7 +1372,7 @@ function SceneContent({
       return;
     }
 
-    const shape = createCustomShape(activeShapeKind, clampToRoom(point, room));
+    const shape = createCustomShape(activeShapeKind, clampToRoom(point, effectiveBoundsForRoom(room, wallSegments)));
     onShapesChange([...shapes, shape]);
     onSelect({ type: "shape", id: shape.id });
     onToolChange("select");
@@ -1751,6 +1752,7 @@ function SceneContent({
               instance={instance}
               asset={asset}
               room={room}
+              wallSegments={wallSegments}
               selected={viewMode === "blockout" && selected?.type === "furniture" && selected.id === instance.id}
               hovered={viewMode === "blockout" && hovered?.type === "furniture" && hovered.id === instance.id}
               tool={viewMode === "blockout" ? tool : "select"}
@@ -1769,6 +1771,7 @@ function SceneContent({
             key={shape.id}
             shape={shape}
             room={room}
+            wallSegments={wallSegments}
             selected={viewMode === "blockout" && selected?.type === "shape" && selected.id === shape.id}
             hovered={viewMode === "blockout" && hovered?.type === "shape" && hovered.id === shape.id}
             tool={viewMode === "blockout" ? tool : "select"}
@@ -3612,6 +3615,7 @@ type FurnitureNodeProps = {
   instance: FurnitureInstance;
   asset?: FurnitureAsset;
   room: RoomBounds;
+  wallSegments: WallSegmentation;
   selected: boolean;
   hovered: boolean;
   tool: ToolMode;
@@ -3626,6 +3630,7 @@ function FurnitureNode({
   instance,
   asset,
   room,
+  wallSegments,
   selected,
   hovered,
   tool,
@@ -3642,7 +3647,7 @@ function FurnitureNode({
   useFrame(() => {
     if (!groupRef.current || !selected) return;
     const object = groupRef.current;
-    const nextPosition = clampToRoom([object.position.x, object.position.y, object.position.z], room);
+    const nextPosition = clampToRoom([object.position.x, object.position.y, object.position.z], effectiveBoundsForRoom(room, wallSegments));
     if (
       nextPosition[0] !== object.position.x ||
       nextPosition[1] !== object.position.y ||
@@ -3710,6 +3715,7 @@ function FurnitureNode({
 type ShapeNodeProps = {
   shape: CustomShape;
   room: RoomBounds;
+  wallSegments: WallSegmentation;
   selected: boolean;
   hovered: boolean;
   tool: ToolMode;
@@ -3723,6 +3729,7 @@ type ShapeNodeProps = {
 function ShapeNode({
   shape,
   room,
+  wallSegments,
   selected,
   hovered,
   tool,
@@ -3739,7 +3746,7 @@ function ShapeNode({
   useFrame(() => {
     if (!groupRef.current || !selected) return;
     const object = groupRef.current;
-    const nextPosition = clampToRoom([object.position.x, object.position.y, object.position.z], room);
+    const nextPosition = clampToRoom([object.position.x, object.position.y, object.position.z], effectiveBoundsForRoom(room, wallSegments));
     if (
       nextPosition[0] !== object.position.x ||
       nextPosition[1] !== object.position.y ||
