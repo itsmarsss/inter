@@ -18,7 +18,6 @@ import type {
   WindowOpening,
 } from "../state/types";
 import { BlueprintDialog } from "./BlueprintDialog";
-import { BottomToolbar } from "./BottomToolbar";
 import { FurniturePanel } from "./FurniturePanel";
 import { IconRail, type RailSection } from "./IconRail";
 import { MinimapPanel } from "./MinimapPanel";
@@ -128,11 +127,6 @@ export function PrecisionLayout({
     }
   }
 
-  function openWorld() {
-    setActiveSection("world");
-    setPanelOpen(true);
-  }
-
   return (
     <div
       style={{
@@ -228,15 +222,6 @@ export function PrecisionLayout({
             room={room}
             blueprint={blueprintPreview}
             onExpand={() => setBlueprintDialogOpen(true)}
-          />
-        </div>
-      </div>
-
-      <div style={{ position: "absolute", inset: 0, pointerEvents: "none", animation: anim("ui-from-bottom", 100) }}>
-        <div style={{ pointerEvents: "auto" }}>
-          <BottomToolbar
-            worldActive={activeSection === "world" && panelOpen}
-            onOpenWorld={openWorld}
           />
         </div>
       </div>

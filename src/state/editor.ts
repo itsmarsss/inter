@@ -292,7 +292,10 @@ export function createInitialDoor(room: RoomBounds): Door {
 }
 
 export function createDoor(room: RoomBounds, wall: WallId = "south"): Door {
-  const width = Math.min(0.9, Math.max(0.65, wallAxisLength(room, wall) * 0.16));
+  // Doors are a fixed physical size (~0.9m wide); only shrink if the wall is
+  // genuinely too short to fit one. Don't scale proportionally with wall length.
+  const STANDARD_DOOR_WIDTH = 0.9;
+  const width = Math.min(STANDARD_DOOR_WIDTH, wallAxisLength(room, wall) * 0.9);
   const height = Math.min(2.05, Math.max(1.75, room.height * 0.74));
   return {
     id: createId(),
