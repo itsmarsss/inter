@@ -361,7 +361,28 @@ export default function App() {
           onShapesChange={setShapes}
           onDoorsChange={setDoors}
           onWindowsChange={setWindows}
+        />
+      }
+      blueprintPreview={
+        <BlueprintView
+          room={state.room}
+          assets={state.furnitureAssets}
+          assetById={assetById}
+          instances={state.furnitureInstances}
+          shapes={state.customShapes}
+          doors={state.doors}
+          windows={state.windows}
+          wallSegments={state.wallSegments}
+          selected={state.selected}
+          tool={state.tool}
+          onSelect={() => undefined}
+          onRoomChange={() => undefined}
+          onInstancesChange={() => undefined}
+          onShapesChange={() => undefined}
+          onDoorsChange={() => undefined}
+          onWindowsChange={() => undefined}
           registerBlueprintCapture={registerBlueprintCapture}
+          interactive={false}
         />
       }
       furnitureAssets={state.furnitureAssets}
