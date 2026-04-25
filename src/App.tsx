@@ -8,23 +8,19 @@ import {
   startFurnitureMeshyTask,
 } from "./api/meshy";
 import { generateRoomWithMarble, pollMarbleOperation } from "./api/marble";
-import { AIDesignPanel } from "./components/AIDesignPanel";
-import { BlueprintView } from "./components/BlueprintView";
-import { FurnitureGenerator } from "./components/FurnitureGenerator";
-import { GeometryPanel } from "./components/GeometryPanel";
+import { PrecisionLayout } from "./components/PrecisionLayout";
 import { SceneView } from "./components/SceneView";
-import { WorkspaceLayout } from "./components/WorkspaceLayout";
 import {
+  buildFurnitureAssetMap,
   createFurnitureAsset,
   createUploadedFurnitureAsset,
-  buildFurnitureAssetMap,
   initialState,
 } from "./state/editor";
 import type { CaptureImage, EditorState } from "./state/types";
 
 export default function App() {
   const [state, setState] = useState<EditorState>(() => ({ ...initialState }));
-  const [hoveredGeometry, setHoveredGeometry] = useState<EditorState["selected"]>(null);
+  const hoveredGeometry: EditorState["selected"] = null;
   const sceneCaptureRef = useRef<() => CaptureImage | undefined>(() => undefined);
   const blueprintCaptureRef = useRef<() => string | undefined>(() => undefined);
   const generationRunRef = useRef(0);
@@ -221,108 +217,40 @@ export default function App() {
   }, [state.marble.operationId, state.marble.status]);
 
   return (
-    <div className="h-dvh overflow-hidden bg-[var(--color-background)] text-[var(--color-text-primary)]">
-      <WorkspaceLayout
-        upload={state.upload}
-        marble={state.marble}
-        tool={state.tool}
-        prompt={state.stylePrompt}
-        panoramaOpacity={state.panoramaOpacity}
-        onUploadModel={handleUploadModel}
-        onToolChange={(tool) => setState((current) => ({ ...current, tool }))}
-        onGenerate={handleGenerateFinalRoom}
-        onCancelRun={handleCancelRun}
-        onPanoramaOpacityChange={(panoramaOpacity) => setState((current) => ({ ...current, panoramaOpacity }))}
-        activeShapeKind={state.activeShapeKind}
-        onActiveShapeKindChange={(activeShapeKind) =>
-          setState((current) => ({ ...current, activeShapeKind, tool: "add-shape" }))
-        }
-        scene={
-          <SceneView
-            room={state.room}
-            assets={state.furnitureAssets}
-            assetById={assetById}
-            instances={state.furnitureInstances}
-            shapes={state.customShapes}
-            cameras={state.cameras}
-            activeShapeKind={state.activeShapeKind}
-            selected={state.selected}
-            hovered={hoveredGeometry}
-            tool={state.tool}
-            marble={state.marble}
-            panoramaOpacity={state.panoramaOpacity}
-            onRoomChange={(room) => setState((current) => ({ ...current, room }))}
-            onInstancesChange={(furnitureInstances) =>
-              setState((current) => ({ ...current, furnitureInstances }))
-            }
-            onShapesChange={(customShapes) => setState((current) => ({ ...current, customShapes }))}
-            onCamerasChange={(cameras) => setState((current) => ({ ...current, cameras }))}
-            onSelect={(selected) => setState((current) => ({ ...current, selected }))}
-            onToolChange={(tool) => setState((current) => ({ ...current, tool }))}
-            registerSceneCapture={registerSceneCapture}
-          />
-        }
-        furniture={<FurnitureGenerator assets={state.furnitureAssets} onGenerate={handleGenerateFurniture} />}
-        geometry={
-          <GeometryPanel
-            room={state.room}
-            assets={state.furnitureAssets}
-            assetById={assetById}
-            instances={state.furnitureInstances}
-            shapes={state.customShapes}
-            cameras={state.cameras}
-            selected={state.selected}
-            onSelect={(selected) => setState((current) => ({ ...current, selected }))}
-            onHover={setHoveredGeometry}
-          />
-        }
-        blueprint={
-          <BlueprintView
-            room={state.room}
-            assets={state.furnitureAssets}
-            assetById={assetById}
-            instances={state.furnitureInstances}
-            shapes={state.customShapes}
-            selected={state.selected}
-            tool={state.tool}
-            onSelect={(selected) => setState((current) => ({ ...current, selected }))}
-            onRoomChange={(room) => setState((current) => ({ ...current, room }))}
-            onInstancesChange={(furnitureInstances) =>
-              setState((current) => ({ ...current, furnitureInstances }))
-            }
-            onShapesChange={(customShapes) => setState((current) => ({ ...current, customShapes }))}
-            registerBlueprintCapture={registerBlueprintCapture}
-          />
-        }
-        blueprintDialog={
-          <BlueprintView
-            room={state.room}
-            assets={state.furnitureAssets}
-            assetById={assetById}
-            instances={state.furnitureInstances}
-            shapes={state.customShapes}
-            selected={state.selected}
-            tool={state.tool}
-            onSelect={(selected) => setState((current) => ({ ...current, selected }))}
-            onRoomChange={(room) => setState((current) => ({ ...current, room }))}
-            onInstancesChange={(furnitureInstances) =>
-              setState((current) => ({ ...current, furnitureInstances }))
-            }
-            onShapesChange={(customShapes) => setState((current) => ({ ...current, customShapes }))}
-            registerBlueprintCapture={() => undefined}
-          />
-        }
-        ai={
-          <AIDesignPanel
-            prompt={state.stylePrompt}
-            marble={state.marble}
-            onPromptChange={(stylePrompt) => setState((current) => ({ ...current, stylePrompt }))}
-            onGenerate={handleGenerateFinalRoom}
-            onCancelRun={handleCancelRun}
-          />
-        }
-      />
-    </div>
+    <PrecisionLayout
+      viewport={
+        <SceneView
+          room={state.room}
+          assets={state.furnitureAssets}
+          assetById={assetById}
+          instances={state.furnitureInstances}
+          shapes={state.customShapes}
+          cameras={state.cameras}
+          activeShapeKind={state.activeShapeKind}
+          selected={state.selected}
+          hovered={hoveredGeometry}
+          tool={state.tool}
+          marble={state.marble}
+          panoramaOpacity={state.panoramaOpacity}
+          onRoomChange={(room) => setState((current) => ({ ...current, room }))}
+          onInstancesChange={(furnitureInstances) =>
+            setState((current) => ({ ...current, furnitureInstances }))
+          }
+          onShapesChange={(customShapes) => setState((current) => ({ ...current, customShapes }))}
+          onCamerasChange={(cameras) => setState((current) => ({ ...current, cameras }))}
+          onSelect={(selected) => setState((current) => ({ ...current, selected }))}
+          onToolChange={(tool) => setState((current) => ({ ...current, tool }))}
+          registerSceneCapture={registerSceneCapture}
+        />
+      }
+      furnitureAssets={state.furnitureAssets}
+      furnitureInstances={state.furnitureInstances}
+      room={state.room}
+      onGenerateFurniture={handleGenerateFurniture}
+      panoramaOpacity={state.panoramaOpacity}
+      onPanoramaOpacityChange={(panoramaOpacity) => setState((current) => ({ ...current, panoramaOpacity }))}
+      upload={state.upload}
+    />
   );
 }
 
