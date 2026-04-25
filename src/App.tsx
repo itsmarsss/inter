@@ -7,6 +7,7 @@ import {
   openFurnitureMeshyStream,
   startFurnitureMeshyTask,
 } from "./api/meshy";
+import { estimateModelLength } from "./api/dimension";
 import { PrecisionLayout } from "./components/PrecisionLayout";
 import { SceneView } from "./components/SceneView";
 import { BlueprintView } from "./components/BlueprintView";
@@ -40,6 +41,34 @@ export default function App({ entering = false }: { entering?: boolean }) {
     blueprintCaptureRef.current = capture;
   }, []);
 
+  // The 3D viewport reports the post-scale axis-aligned size of each loaded
+  // GLB so the 2D blueprint can draw an accurate top-down bounding rectangle.
+  // We dedupe by comparing against the asset's current footprint with a small
+  // tolerance to avoid render loops triggered by floating-point drift.
+  const handleAssetMeasured = useCallback(
+    (assetId: string, footprint: { width: number; depth: number; height: number }) => {
+      setState((current) => {
+        let changed = false;
+        const furnitureAssets = current.furnitureAssets.map((item) => {
+          if (item.id !== assetId) return item;
+          const previous = item.footprint;
+          if (
+            previous &&
+            Math.abs(previous.width - footprint.width) < 1e-3 &&
+            Math.abs(previous.depth - footprint.depth) < 1e-3 &&
+            Math.abs(previous.height - footprint.height) < 1e-3
+          ) {
+            return item;
+          }
+          changed = true;
+          return { ...item, footprint };
+        });
+        return changed ? { ...current, furnitureAssets } : current;
+      });
+    },
+    [],
+  );
+
   async function handleGenerateFurniture(prompt: string) {
     const asset = createFurnitureAsset(prompt);
     setState((current) => ({
@@ -47,10 +76,27 @@ export default function App({ entering = false }: { entering?: boolean }) {
       furnitureAssets: [{ ...asset, status: "generating", progress: 0 }, ...current.furnitureAssets],
     }));
 
+    // Kick off the real-world length estimate in parallel with the Meshy job.
+    // This is best-effort — when it resolves we patch `realLengthMeters` onto
+    // the asset; the GLB renderer will pick it up on its next render and
+    // rescale accordingly. Failure (no API key, network blip, etc.) just means
+    // the model renders at its native GLB scale.
+    estimateModelLength(prompt).then((lengthMeters) => {
+      if (lengthMeters === null) return;
+      setState((current) => ({
+        ...current,
+        furnitureAssets: current.furnitureAssets.map((item) =>
+          item.id === asset.id ? { ...item, realLengthMeters: lengthMeters } : item,
+        ),
+      }));
+    });
+
     const started = await startFurnitureMeshyTask({ ...asset, status: "generating", progress: 0 });
     setState((current) => ({
       ...current,
-      furnitureAssets: current.furnitureAssets.map((item) => (item.id === asset.id ? started : item)),
+      furnitureAssets: current.furnitureAssets.map((item) =>
+        item.id === asset.id ? { ...started, realLengthMeters: item.realLengthMeters } : item,
+      ),
     }));
 
     if (started.status !== "generating" || !started.taskId) return;
@@ -327,6 +373,7 @@ export default function App({ entering = false }: { entering?: boolean }) {
           onSelect={setSelected}
           onToolChange={setTool}
           registerSceneCapture={registerSceneCapture}
+          onAssetMeasured={handleAssetMeasured}
         />
       }
       blueprint={

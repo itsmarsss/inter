@@ -538,7 +538,7 @@ export function BlueprintView({
         })}
         {instances.map((instance) => {
           const asset = assetById?.get(instance.assetId) ?? assets.find((item) => item.id === instance.assetId);
-          const footprint = footprintFor(asset?.primitive);
+          const footprint = resolveFurnitureFootprint(asset);
           const metrics = objectMetrics(instance.position, instance.rotation[1], instance.scale, footprint.width, footprint.depth);
           const isSelected = selected?.type === "furniture" && selected.id === instance.id;
           return (
@@ -809,7 +809,7 @@ function furnitureHandleMetrics(
   const instance = instances.find((item) => item.id === id);
   if (!instance) return null;
   const asset = assetById?.get(instance.assetId) ?? assets.find((item) => item.id === instance.assetId);
-  const footprint = footprintFor(asset?.primitive);
+  const footprint = resolveFurnitureFootprint(asset);
   return objectMetrics(instance.position, instance.rotation[1], instance.scale, footprint.width, footprint.depth);
 }
 
@@ -935,6 +935,23 @@ function footprintFor(primitive?: FurnitureAsset["primitive"]) {
   if (primitive === "lamp" || primitive === "plant") return { width: 0.55, depth: 0.55 };
   if (primitive === "cabinet") return { width: 1.35, depth: 0.5 };
   return { width: 1.65, depth: 0.9 };
+}
+
+// Prefer the actual measured GLB footprint reported by the 3D viewport;
+// fall back to a primitive-shape default while the model is still loading
+// or when no measurement has been reported yet.
+function resolveFurnitureFootprint(asset?: FurnitureAsset) {
+  const measured = asset?.footprint;
+  if (
+    measured &&
+    Number.isFinite(measured.width) &&
+    Number.isFinite(measured.depth) &&
+    measured.width > 0 &&
+    measured.depth > 0
+  ) {
+    return { width: measured.width, depth: measured.depth };
+  }
+  return footprintFor(asset?.primitive);
 }
 
 function openingSegment(

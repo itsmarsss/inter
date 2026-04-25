@@ -74,6 +74,10 @@ type SceneViewProps = {
   onSelect: (selected: SelectedRef) => void;
   onToolChange: (tool: ToolMode) => void;
   registerSceneCapture: (capture: () => CaptureImage | undefined) => void;
+  onAssetMeasured?: (
+    assetId: string,
+    footprint: { width: number; depth: number; height: number },
+  ) => void;
 };
 
 type Projector = (clientX: number, clientY: number) => Vec3 | null;
@@ -548,6 +552,7 @@ function SceneContent({
   onSelect,
   onToolChange,
   registerSceneCapture,
+  onAssetMeasured,
   marble,
   viewMode,
   generatedAvailable,
@@ -1894,6 +1899,11 @@ function SceneContent({
               onRotateStart={(event) => handleInstanceRotatePointerDown(instance, event)}
               onTransformActiveChange={handleTransformActiveChange}
               onChange={updateInstance}
+              onMeasured={
+                onAssetMeasured && asset
+                  ? (footprint) => onAssetMeasured(asset.id, footprint)
+                  : undefined
+              }
             />
           );
         })}
@@ -3938,6 +3948,7 @@ type FurnitureNodeProps = {
   onRotateStart: (event: ThreeEvent<PointerEvent>) => void;
   onTransformActiveChange: (active: boolean) => void;
   onChange: (instance: FurnitureInstance) => void;
+  onMeasured?: (footprint: { width: number; depth: number; height: number }) => void;
 };
 
 function FurnitureNode({
@@ -3953,6 +3964,7 @@ function FurnitureNode({
   onRotateStart,
   onTransformActiveChange,
   onChange,
+  onMeasured,
 }: FurnitureNodeProps) {
   const groupRef = useRef<THREE.Group>(null);
   const transformMode = tool === "rotate" ? "rotate" : tool === "scale" ? "scale" : "translate";
@@ -4000,7 +4012,14 @@ function FurnitureNode({
             resetKey={modelUrl}
             fallback={<GeneratedModelFallback primitive={asset.primitive} selected={selected} hovered={hovered} opacity={opacity} />}
           >
-            <GeneratedModel url={modelUrl} selected={selected} hovered={hovered} opacity={opacity} />
+            <GeneratedModel
+              url={modelUrl}
+              selected={selected}
+              hovered={hovered}
+              opacity={opacity}
+              realLengthMeters={asset.realLengthMeters}
+              onMeasured={onMeasured}
+            />
           </GeneratedModelBoundary>
         ) : (
           <PrimitiveFurniture primitive={asset?.primitive ?? "sofa"} selected={selected} hovered={hovered} opacity={opacity} />
@@ -4366,9 +4385,63 @@ class GeneratedModelBoundary extends Component<GeneratedModelBoundaryProps, Gene
   }
 }
 
-function GeneratedModel({ url, selected, hovered, opacity }: { url: string; selected: boolean; hovered: boolean; opacity: number }) {
+function GeneratedModel({
+  url,
+  selected,
+  hovered,
+  opacity,
+  realLengthMeters,
+  onMeasured,
+}: {
+  url: string;
+  selected: boolean;
+  hovered: boolean;
+  opacity: number;
+  realLengthMeters?: number;
+  onMeasured?: (footprint: { width: number; depth: number; height: number }) => void;
+}) {
   const gltf = useGLTF(url);
   const model = useMemo(() => gltf.scene.clone(), [gltf.scene]);
+
+  // Compute scale + Y offset so that:
+  //   - when we have a Gemini-estimated real-world length, the longest axis
+  //     of the GLB matches that physical size in meters
+  //   - the bottom of the model always rests exactly on the floor (y = 0)
+  //
+  // We measure the bbox in the GLB's native (pre-scale) local space, then
+  // apply a single uniform scale + Y translation on a wrapping group. The
+  // user's per-instance scale (TransformControls) still composes on top.
+  //
+  // We also report the post-scale axis-aligned size so 2D blueprint views
+  // can draw an accurate top-down bounding rectangle for this asset.
+  const { uniformScale, floorOffsetY, footprint } = useMemo(() => {
+    const box = new THREE.Box3().setFromObject(model);
+    if (box.isEmpty() || !Number.isFinite(box.min.y)) {
+      return { uniformScale: 1, floorOffsetY: 0, footprint: null as null | { width: number; depth: number; height: number } };
+    }
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const longest = Math.max(size.x, size.y, size.z);
+    const s =
+      typeof realLengthMeters === "number" && realLengthMeters > 0 && longest > 0
+        ? realLengthMeters / longest
+        : 1;
+    return {
+      uniformScale: s,
+      floorOffsetY: -box.min.y * s,
+      footprint: { width: size.x * s, depth: size.z * s, height: size.y * s },
+    };
+  }, [model, realLengthMeters]);
+
+  const onMeasuredRef = useRef(onMeasured);
+  useEffect(() => {
+    onMeasuredRef.current = onMeasured;
+  }, [onMeasured]);
+
+  useEffect(() => {
+    if (!footprint) return;
+    onMeasuredRef.current?.(footprint);
+  }, [footprint]);
 
   useEffect(() => {
     model.traverse((object) => {
@@ -4386,7 +4459,9 @@ function GeneratedModel({ url, selected, hovered, opacity }: { url: string; sele
 
   return (
     <group>
-      <primitive object={model} />
+      <group position={[0, floorOffsetY, 0]} scale={[uniformScale, uniformScale, uniformScale]}>
+        <primitive object={model} />
+      </group>
       {selected || hovered ? <SelectionRing opacity={opacity} selected={selected} /> : null}
     </group>
   );

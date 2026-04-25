@@ -54,6 +54,18 @@ export type FurnitureAsset = {
   createdAt: number;
   error?: string;
   primitive: "sofa" | "table" | "chair" | "lamp" | "plant" | "cabinet";
+  // LLM-estimated real-world length (longest physical dimension) in meters,
+  // used to scale the imported GLB to a believable size.
+  realLengthMeters?: number;
+  // Post-scale axis-aligned footprint of the loaded GLB, in meters. Reported
+  // by the 3D viewport once the model is measured so that 2D blueprint views
+  // can draw an accurate top-down bounding box instead of falling back to a
+  // primitive-shape guess.
+  footprint?: {
+    width: number;
+    depth: number;
+    height: number;
+  };
 };
 
 export type FurnitureAssetMap = Map<string, FurnitureAsset>;
