@@ -4401,37 +4401,46 @@ function GeneratedModel({
   onMeasured?: (footprint: { width: number; depth: number; height: number }) => void;
 }) {
   const gltf = useGLTF(url);
-  const model = useMemo(() => gltf.scene.clone(), [gltf.scene]);
+
+  // Clone the GLB scene AND measure its local bounding box in the same memo,
+  // before the clone is attached to anything in the React-Three tree. This is
+  // crucial: `Box3.setFromObject` reads `matrixWorld`, so once a model is
+  // mounted inside our wrapping <group>, a later measurement would return the
+  // *world* bbox (which already includes whatever scale + Y offset the
+  // previous render baked in). Caching the local bbox once per loaded GLB
+  // means subsequent `realLengthMeters` changes only re-derive the scaling
+  // math — not the bbox — and the floor align stays correct on every
+  // re-render.
+  const { model, localBox, localSize } = useMemo(() => {
+    const clone = gltf.scene.clone();
+    const box = new THREE.Box3().setFromObject(clone);
+    const size = new THREE.Vector3();
+    if (!box.isEmpty()) box.getSize(size);
+    return { model: clone, localBox: box, localSize: size };
+  }, [gltf.scene]);
 
   // Compute scale + Y offset so that:
   //   - when we have a Gemini-estimated real-world length, the longest axis
   //     of the GLB matches that physical size in meters
   //   - the bottom of the model always rests exactly on the floor (y = 0)
   //
-  // We measure the bbox in the GLB's native (pre-scale) local space, then
-  // apply a single uniform scale + Y translation on a wrapping group. The
-  // user's per-instance scale (TransformControls) still composes on top.
-  //
   // We also report the post-scale axis-aligned size so 2D blueprint views
   // can draw an accurate top-down bounding rectangle for this asset.
   const { uniformScale, floorOffsetY, footprint } = useMemo(() => {
-    const box = new THREE.Box3().setFromObject(model);
-    if (box.isEmpty() || !Number.isFinite(box.min.y)) {
+    if (localBox.isEmpty() || !Number.isFinite(localBox.min.y)) {
       return { uniformScale: 1, floorOffsetY: 0, footprint: null as null | { width: number; depth: number; height: number } };
     }
-    const size = new THREE.Vector3();
-    box.getSize(size);
-    const longest = Math.max(size.x, size.y, size.z);
+    const longest = Math.max(localSize.x, localSize.y, localSize.z);
     const s =
       typeof realLengthMeters === "number" && realLengthMeters > 0 && longest > 0
         ? realLengthMeters / longest
         : 1;
     return {
       uniformScale: s,
-      floorOffsetY: -box.min.y * s,
-      footprint: { width: size.x * s, depth: size.z * s, height: size.y * s },
+      floorOffsetY: -localBox.min.y * s,
+      footprint: { width: localSize.x * s, depth: localSize.z * s, height: localSize.y * s },
     };
-  }, [model, realLengthMeters]);
+  }, [localBox, localSize, realLengthMeters]);
 
   const onMeasuredRef = useRef(onMeasured);
   useEffect(() => {
