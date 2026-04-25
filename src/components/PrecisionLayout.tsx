@@ -103,32 +103,6 @@ export function PrecisionLayout({
         onOpenWorld={openWorld}
       />
 
-      {/* Version badge */}
-      <div
-        style={{
-          position: "absolute",
-          bottom: 14,
-          left: 56,
-          width: 28,
-          height: 28,
-          borderRadius: "50%",
-          background: "var(--surface-raised)",
-          border: "1px solid var(--border-dim)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: 12,
-          fontWeight: 500,
-          color: "var(--text-primary)",
-          fontFamily: "var(--font-ui)",
-          zIndex: 15,
-          pointerEvents: "none",
-          userSelect: "none",
-        }}
-      >
-        N
-      </div>
-
       {/* Upload error toast */}
       {upload.status === "failed" && (
         <div
