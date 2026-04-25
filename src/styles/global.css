@@ -33,6 +33,15 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+textarea.precision-textarea::placeholder {
+  color: var(--text-ghost);
+  font-style: italic;
+}
+
 /* Placeholder italic */
 input.precision-input::placeholder {
   color: var(--text-ghost);

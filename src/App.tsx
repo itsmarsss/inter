@@ -250,6 +250,11 @@ export default function App() {
       panoramaOpacity={state.panoramaOpacity}
       onPanoramaOpacityChange={(panoramaOpacity) => setState((current) => ({ ...current, panoramaOpacity }))}
       upload={state.upload}
+      stylePrompt={state.stylePrompt}
+      onStylePromptChange={(stylePrompt) => setState((current) => ({ ...current, stylePrompt }))}
+      marble={state.marble}
+      onGenerateRoom={handleGenerateFinalRoom}
+      onCancelRun={handleCancelRun}
     />
   );
 }

@@ -3,7 +3,12 @@
 import { Wand2 } from "lucide-react";
 import { useState } from "react";
 
-export function BottomToolbar() {
+type BottomToolbarProps = {
+  panelOpen: boolean;
+  onTogglePanel: () => void;
+};
+
+export function BottomToolbar({ panelOpen, onTogglePanel }: BottomToolbarProps) {
   const [hovered, setHovered] = useState(false);
 
   return (
@@ -29,20 +34,31 @@ export function BottomToolbar() {
       >
         <button
           type="button"
-          aria-label="Magic wand"
+          aria-label={panelOpen ? "Hide generate panel" : "Show generate panel"}
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
+          onClick={onTogglePanel}
           style={{
             width: 28,
             height: 28,
             borderRadius: "50%",
-            background: hovered ? "var(--surface-overlay)" : "var(--surface-input)",
-            border: "1px solid var(--border-dim)",
+            background: panelOpen
+              ? "var(--accent-dim)"
+              : hovered
+              ? "var(--surface-overlay)"
+              : "var(--surface-input)",
+            border: panelOpen
+              ? "1px solid var(--accent-border)"
+              : "1px solid var(--border-dim)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             cursor: "pointer",
-            color: hovered ? "var(--text-primary)" : "var(--text-secondary)",
+            color: panelOpen
+              ? "var(--accent-text)"
+              : hovered
+              ? "var(--text-primary)"
+              : "var(--text-secondary)",
             transition: "all 120ms",
           }}
         >
