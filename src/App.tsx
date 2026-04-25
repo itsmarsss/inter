@@ -22,13 +22,8 @@ import {
 } from "./state/editor";
 import type { CaptureImage, EditorState } from "./state/types";
 
-const EXAMPLE_SPZ_URL = "https://sparkjs.dev/assets/splats/butterfly.spz";
-
 export default function App() {
-  const [state, setState] = useState<EditorState>(() => ({
-    ...initialState,
-    marble: exampleSplatResult(),
-  }));
+  const [state, setState] = useState<EditorState>(() => ({ ...initialState }));
   const [hoveredGeometry, setHoveredGeometry] = useState<EditorState["selected"]>(null);
   const sceneCaptureRef = useRef<() => CaptureImage | undefined>(() => undefined);
   const blueprintCaptureRef = useRef<() => string | undefined>(() => undefined);
@@ -139,13 +134,6 @@ export default function App() {
     setState((current) => ({ ...current, marble: { status: "idle" } }));
   }
 
-  const loadExampleSplat = useCallback(() => {
-    setState((current) => ({
-      ...current,
-      marble: exampleSplatResult(),
-    }));
-  }, []);
-
   function handleUploadModel(file: File) {
     const valid = file.name.toLowerCase().endsWith(".glb") || file.name.toLowerCase().endsWith(".gltf");
     if (!valid) {
@@ -245,7 +233,6 @@ export default function App() {
         onGenerate={handleGenerateFinalRoom}
         onCancelRun={handleCancelRun}
         onPanoramaOpacityChange={(panoramaOpacity) => setState((current) => ({ ...current, panoramaOpacity }))}
-        onLoadExample={loadExampleSplat}
         activeShapeKind={state.activeShapeKind}
         onActiveShapeKindChange={(activeShapeKind) =>
           setState((current) => ({ ...current, activeShapeKind, tool: "add-shape" }))
@@ -332,7 +319,6 @@ export default function App() {
             onPromptChange={(stylePrompt) => setState((current) => ({ ...current, stylePrompt }))}
             onGenerate={handleGenerateFinalRoom}
             onCancelRun={handleCancelRun}
-            onLoadExample={loadExampleSplat}
           />
         }
       />
@@ -352,12 +338,3 @@ function sameMarbleResult(left: EditorState["marble"], right: EditorState["marbl
     left.payload === right.payload;
 }
 
-function exampleSplatResult(): EditorState["marble"] {
-  return {
-    status: "complete",
-    operationId: "example-spark-butterfly",
-    spzUrl: EXAMPLE_SPZ_URL,
-    worldUrl: EXAMPLE_SPZ_URL,
-    payload: initialState.marble.payload,
-  };
-}

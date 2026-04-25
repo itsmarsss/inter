@@ -1,4 +1,4 @@
-import { Loader2, RotateCw, Sparkles, WandSparkles, XCircle } from "lucide-react";
+import { Loader2, RotateCw, Sparkles, XCircle } from "lucide-react";
 import type { MarbleResult } from "../state/types";
 
 type AIDesignPanelProps = {
@@ -7,7 +7,6 @@ type AIDesignPanelProps = {
   onPromptChange: (prompt: string) => void;
   onGenerate: () => void;
   onCancelRun: () => void;
-  onLoadExample: () => void;
 };
 
 export function AIDesignPanel({
@@ -16,7 +15,6 @@ export function AIDesignPanel({
   onPromptChange,
   onGenerate,
   onCancelRun,
-  onLoadExample,
 }: AIDesignPanelProps) {
   const busy = marble.status === "uploading" || marble.status === "generating";
   const hasResult = marble.status === "complete" && Boolean(marble.payload);
@@ -36,7 +34,7 @@ export function AIDesignPanel({
           rows={2}
           className="min-h-[3.75rem] resize-none rounded-md border border-[var(--color-border)] bg-[var(--color-inset)] px-2.5 py-2 text-[13px] leading-5 text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-subtle)] focus:border-[var(--color-accent)] focus:ring-2 focus:ring-[var(--color-focus)]"
         />
-        <div className="grid gap-1.5 sm:grid-cols-[minmax(9rem,1fr)_auto_auto]">
+        <div className="grid gap-1.5 sm:grid-cols-[minmax(9rem,1fr)_auto]">
           <button
             type="button"
             onClick={onGenerate}
@@ -54,15 +52,6 @@ export function AIDesignPanel({
           >
             <XCircle className="size-3.5" />
             Cancel
-          </button>
-          <button
-            type="button"
-            onClick={onLoadExample}
-            disabled={busy}
-            className="flex h-8 items-center justify-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 text-xs font-semibold text-[var(--color-text-primary)] hover:bg-[var(--color-inset)] disabled:cursor-not-allowed disabled:text-[var(--color-text-muted)]"
-          >
-            <WandSparkles className="size-3.5" />
-            Sample
           </button>
         </div>
       </div>

@@ -6,7 +6,6 @@ import {
   Cuboid,
   Cylinder,
   Expand,
-  EyeOff,
   FileUp,
   Layers3,
   Map,
@@ -43,7 +42,6 @@ type WorkspaceLayoutProps = {
   onGenerate: () => void;
   onCancelRun: () => void;
   onPanoramaOpacityChange: (opacity: number) => void;
-  onLoadExample: () => void;
   activeShapeKind: ShapeKind;
   onActiveShapeKindChange: (kind: ShapeKind) => void;
   scene: React.ReactNode;
@@ -118,7 +116,6 @@ export function WorkspaceLayout({
   onUploadModel,
   onToolChange,
   onPanoramaOpacityChange,
-  onLoadExample,
   activeShapeKind,
   onActiveShapeKindChange,
   scene,
@@ -562,15 +559,6 @@ export function WorkspaceLayout({
         )}
 
         <div className="pointer-events-auto absolute bottom-[calc(env(safe-area-inset-bottom)+0.75rem)] right-3 hidden items-center gap-2 sm:flex">
-          <button
-            type="button"
-            onClick={onLoadExample}
-            className="grid size-9 place-items-center rounded-md border border-[var(--color-border)] bg-[var(--color-overlay)] text-[var(--color-text-muted)] hover:bg-[var(--color-inset)] hover:text-[var(--color-text-primary)]"
-            aria-label="Load sample result"
-            title="Load sample result"
-          >
-            <EyeOff className="size-4" />
-          </button>
           <label className="flex h-9 items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-overlay)] px-2 text-[11px] font-medium text-[var(--color-text-muted)] shadow-[var(--shadow-panel)]">
             Ref
             <input
