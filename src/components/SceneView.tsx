@@ -272,7 +272,7 @@ const LOCAL_SPLAT_DEFAULTS: Record<string, SplatAlignment> = {
   "/splats/sleek-icelandic-bedroom.spz": {
     position: [0, 0, 0],
     rotationY: 0,
-    scale: 3,
+    scale: 1.8,
     flipX: false,
   },
 };
