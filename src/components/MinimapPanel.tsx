@@ -1,6 +1,6 @@
 "use client";
 
-import { Map, Maximize2, Minus } from "lucide-react";
+import { Map, Maximize2 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import type { FurnitureInstance, RoomBounds } from "../state/types";
 import { roomDimensions } from "../state/editor";
@@ -8,6 +8,7 @@ import { roomDimensions } from "../state/editor";
 type MinimapPanelProps = {
   room: RoomBounds;
   instances: FurnitureInstance[];
+  onExpand?: () => void;
 };
 
 const SVG_W = 210;
@@ -15,7 +16,7 @@ const SVG_H = 160;
 const PAD_X = 22;
 const PAD_Y = 18;
 
-export function MinimapPanel({ room, instances }: MinimapPanelProps) {
+export function MinimapPanel({ room, instances, onExpand }: MinimapPanelProps) {
   const dims = roomDimensions(room);
 
   const roomW = room.maxX - room.minX;
@@ -71,10 +72,9 @@ export function MinimapPanel({ room, instances }: MinimapPanelProps) {
             fontFamily: "var(--font-ui)",
           }}
         >
-          Minimap
+          Blueprint
         </span>
-        <HeaderBtn icon={<Minus size={10} strokeWidth={1.5} />} label="Minimize" />
-        <HeaderBtn icon={<Maximize2 size={10} strokeWidth={1.5} />} label="Expand" />
+        <HeaderBtn icon={<Maximize2 size={10} strokeWidth={1.5} />} label="Expand" onClick={onExpand} />
       </div>
 
       {/* Parchment canvas */}
@@ -188,12 +188,14 @@ export function MinimapPanel({ room, instances }: MinimapPanelProps) {
   );
 }
 
-function HeaderBtn({ icon, label }: { icon: ReactNode; label: string }) {
+function HeaderBtn({ icon, label, onClick }: { icon: ReactNode; label: string; onClick?: () => void }) {
   const [hovered, setHovered] = useState(false);
   return (
     <button
       type="button"
       aria-label={label}
+      title={label}
+      onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{

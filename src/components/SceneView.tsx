@@ -77,7 +77,7 @@ type SceneViewProps = {
 
 type Projector = (clientX: number, clientY: number) => Vec3 | null;
 type ViewMode = "blockout" | "generated";
-type ComparisonMode = "blockout" | "blend" | "splat";
+type ComparisonMode = "blockout" | "splat";
 type ObjectSplatMode = "off" | "highlight" | "fade" | "hide" | "isolate";
 type SplatLoadState = { status: "idle" | "loading" | "ready" | "error"; message?: string };
 type SplatAlignment = {
@@ -366,7 +366,7 @@ export function SceneView(props: SceneViewProps) {
   const activeComparisonMode = generatedAvailable
     ? comparisonSpzUrl === props.marble.spzUrl
       ? comparisonMode
-      : "blend"
+      : "splat"
     : "blockout";
   const activeComparisonValue = generatedAvailable
     ? comparisonSpzUrl === props.marble.spzUrl
@@ -396,7 +396,6 @@ export function SceneView(props: SceneViewProps) {
       setComparisonValue(0);
       setFirstPersonActive(false);
     }
-    if (nextMode === "blend") setComparisonValue((current) => (current > 0 && current < 100 ? current : 50));
     if (nextMode === "splat") setComparisonValue(100);
   }
 
@@ -462,25 +461,24 @@ export function SceneView(props: SceneViewProps) {
         />
       </Canvas>
       <ToolHintBanner tool={props.tool} />
-      <div className="absolute left-1/2 top-3 flex min-w-0 max-w-[calc(100vw-1.5rem)] -translate-x-1/2 flex-col gap-1 rounded-md border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-overlay)_86%,transparent)] px-2 py-1 text-xs text-[var(--color-text-muted)] shadow-[var(--shadow-float)] [backdrop-filter:var(--panel-blur)]">
+      {generatedAvailable ? (
+      <div className="absolute right-3 bottom-12 flex min-w-0 max-w-[calc(100vw-1.5rem)] flex-col gap-1 rounded-md border border-[var(--border-dim)] bg-[var(--surface-raised)] px-2 py-1 text-xs text-[var(--text-secondary)] shadow-[0_8px_24px_rgba(0,0,0,0.45)]">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <div className="shrink-0 px-1 font-medium text-[var(--color-text-primary)]">
-            {generatedAvailable ? "Compare" : "Blockout"}
+          <div className="shrink-0 px-1 font-medium text-[var(--text-bright)]">
+            Compare
           </div>
-          <div className="flex shrink-0 rounded-sm border border-[var(--color-border)] bg-[var(--color-inset)] p-0.5">
-            {(["blockout", "blend", "splat"] as ComparisonMode[]).map((mode) => {
-              const disabled = !generatedAvailable && mode !== "blockout";
+          <div className="flex shrink-0 rounded-sm border border-[var(--border-dim)] bg-[var(--surface-input)] p-0.5">
+            {(["blockout", "splat"] as ComparisonMode[]).map((mode) => {
               return (
                 <button
                   key={mode}
                   type="button"
                   aria-pressed={activeComparisonMode === mode}
-                  disabled={disabled}
                   className={`h-7 min-w-0 rounded-sm px-2 font-medium capitalize ${
                     activeComparisonMode === mode
-                      ? "bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
-                      : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
-                  } ${disabled ? "cursor-not-allowed opacity-45 hover:text-[var(--color-text-muted)]" : ""}`}
+                      ? "bg-[var(--accent-dim)] text-[var(--accent-text)]"
+                      : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                  }`}
                   onClick={() => selectComparisonMode(mode)}
                 >
                   {mode === "blockout" ? "Block" : mode}
@@ -488,29 +486,27 @@ export function SceneView(props: SceneViewProps) {
               );
             })}
           </div>
-          {generatedAvailable ? (
-            <button
-              type="button"
-              aria-pressed={firstPersonEnabled}
-              aria-label={firstPersonEnabled ? "Exit first-person view" : "Enter first-person view"}
-              title={firstPersonEnabled ? "Exit first-person view" : "Enter first-person view"}
-              className={`flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-sm border border-[var(--color-border)] px-2 font-medium ${
-                firstPersonEnabled
-                  ? "bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
-                  : "bg-[var(--color-surface)] text-[var(--color-text-primary)] hover:bg-[var(--color-inset)]"
-              }`}
-              onClick={firstPersonEnabled ? exitFirstPerson : enterFirstPerson}
-            >
-              <Footprints className="size-3.5" />
-              <span>{firstPersonEnabled ? "Exit" : "Walk"}</span>
-            </button>
-          ) : null}
+          <button
+            type="button"
+            aria-pressed={firstPersonEnabled}
+            aria-label={firstPersonEnabled ? "Exit first-person view" : "Enter first-person view"}
+            title={firstPersonEnabled ? "Exit first-person view" : "Enter first-person view"}
+            className={`flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-sm border border-[var(--border-dim)] px-2 font-medium ${
+              firstPersonEnabled
+                ? "bg-[var(--accent-dim)] text-[var(--accent-text)]"
+                : "bg-[var(--surface-input)] text-[var(--text-primary)] hover:bg-[var(--surface-overlay)]"
+            }`}
+            onClick={firstPersonEnabled ? exitFirstPerson : enterFirstPerson}
+          >
+            <Footprints className="size-3.5" />
+            <span>{firstPersonEnabled ? "Exit" : "Walk"}</span>
+          </button>
         </div>
         {objectSplatControlsVisible ? (
-          <div className="flex min-w-0 items-center gap-2 border-t border-[var(--color-border)] pt-1">
-            <span className="shrink-0 font-medium text-[var(--color-text-primary)]">Object</span>
-            <span className="max-w-[7rem] truncate text-[var(--color-text-muted)]">{selectedSplatRegion?.label}</span>
-            <div className="flex min-w-0 flex-1 rounded-sm border border-[var(--color-border)] bg-[var(--color-inset)] p-0.5">
+          <div className="flex min-w-0 items-center gap-2 border-t border-[var(--border-dim)] pt-1">
+            <span className="shrink-0 font-medium text-[var(--text-bright)]">Object</span>
+            <span className="max-w-[7rem] truncate text-[var(--text-secondary)]">{selectedSplatRegion?.label}</span>
+            <div className="flex min-w-0 flex-1 rounded-sm border border-[var(--border-dim)] bg-[var(--surface-input)] p-0.5">
               {OBJECT_SPLAT_MODES.map((mode) => (
                 <button
                   key={mode.value}
@@ -519,8 +515,8 @@ export function SceneView(props: SceneViewProps) {
                   className={cn(
                     "min-w-0 flex-1 rounded-sm px-1.5 py-0.5 font-medium",
                     objectSplatMode === mode.value
-                      ? "bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
-                      : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]",
+                      ? "bg-[var(--accent-dim)] text-[var(--accent-text)]"
+                      : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
                   )}
                   onClick={() => setObjectSplatMode(mode.value)}
                 >
@@ -531,6 +527,7 @@ export function SceneView(props: SceneViewProps) {
           </div>
         ) : null}
       </div>
+      ) : null}
       {splatOpacity > 0 && splatLoadState.status !== "ready" ? (
         <SplatViewportOverlay marble={props.marble} loadState={splatLoadState} />
       ) : null}

@@ -1,5 +1,6 @@
 "use client";
 
+import { Camera, Layers2 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import type {
   CustomShape,
@@ -18,11 +19,13 @@ import type {
   WallSegmentation,
   WindowOpening,
 } from "../state/types";
-import { BlueprintPanel } from "./BlueprintPanel";
+import { BlueprintDialog } from "./BlueprintDialog";
+import { BottomToolbar } from "./BottomToolbar";
 import { FurniturePanel } from "./FurniturePanel";
 import { IconRail, type RailSection } from "./IconRail";
 import { MinimapPanel } from "./MinimapPanel";
 import { ObjectsPanel } from "./ObjectsPanel";
+import { PlaceholderPanel } from "./PlaceholderPanel";
 import { Viewport } from "./Viewport";
 import { WorldPanel } from "./WorldPanel";
 
@@ -98,6 +101,7 @@ export function PrecisionLayout({
 }: PrecisionLayoutProps) {
   const [activeSection, setActiveSection] = useState<RailSection>("objects");
   const [panelOpen, setPanelOpen] = useState(true);
+  const [blueprintDialogOpen, setBlueprintDialogOpen] = useState(false);
 
   function handleSectionChange(section: RailSection) {
     if (section === activeSection && panelOpen) {
@@ -106,6 +110,11 @@ export function PrecisionLayout({
       setActiveSection(section);
       setPanelOpen(true);
     }
+  }
+
+  function openWorld() {
+    setActiveSection("world");
+    setPanelOpen(true);
   }
 
   return (
@@ -130,6 +139,14 @@ export function PrecisionLayout({
       />
 
       {/* Layer 1 — left panels (always mounted, width-animated) */}
+      <PlaceholderPanel
+        open={panelOpen && activeSection === "scenes"}
+        title="Scenes"
+        icon={Layers2}
+        description="Save and switch between scene presets."
+        onClose={() => setPanelOpen(false)}
+      />
+
       <ObjectsPanel
         open={panelOpen && activeSection === "objects"}
         tool={tool}
@@ -160,9 +177,11 @@ export function PrecisionLayout({
         onClose={() => setPanelOpen(false)}
       />
 
-      <BlueprintPanel
-        open={panelOpen && activeSection === "blueprint"}
-        blueprint={blueprint}
+      <PlaceholderPanel
+        open={panelOpen && activeSection === "viewpoints"}
+        title="Viewpoints"
+        icon={Camera}
+        description="Bookmark camera angles and walkthroughs."
         onClose={() => setPanelOpen(false)}
       />
 
@@ -177,7 +196,16 @@ export function PrecisionLayout({
       />
 
       {/* Layer 2 — floating chrome (never covers viewport center) */}
-      <MinimapPanel room={room} instances={furnitureInstances} />
+      <MinimapPanel
+        room={room}
+        instances={furnitureInstances}
+        onExpand={() => setBlueprintDialogOpen(true)}
+      />
+
+      <BottomToolbar
+        worldActive={activeSection === "world" && panelOpen}
+        onOpenWorld={openWorld}
+      />
 
       {/* Upload error toast */}
       {upload.status === "failed" && (
@@ -202,6 +230,11 @@ export function PrecisionLayout({
         </div>
       )}
 
+      <BlueprintDialog
+        open={blueprintDialogOpen}
+        blueprint={blueprint}
+        onClose={() => setBlueprintDialogOpen(false)}
+      />
     </div>
   );
 }

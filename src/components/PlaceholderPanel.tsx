@@ -1,15 +1,17 @@
 "use client";
 
-import { Map, Minus } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { Minus } from "lucide-react";
+import { type ComponentType, type ReactNode, useState } from "react";
 
-type BlueprintPanelProps = {
+type PlaceholderPanelProps = {
   open: boolean;
-  blueprint: ReactNode;
+  title: string;
+  icon: ComponentType<{ size?: number; strokeWidth?: number; color?: string }>;
+  description: string;
   onClose: () => void;
 };
 
-export function BlueprintPanel({ open, blueprint, onClose }: BlueprintPanelProps) {
+export function PlaceholderPanel({ open, title, icon: Icon, description, onClose }: PlaceholderPanelProps) {
   return (
     <div
       style={{
@@ -17,11 +19,12 @@ export function BlueprintPanel({ open, blueprint, onClose }: BlueprintPanelProps
         left: 44,
         top: 0,
         bottom: 0,
-        width: open ? 360 : 0,
+        width: open ? 268 : 0,
         opacity: open ? 1 : 0,
         pointerEvents: open ? "auto" : "none",
-        background: "var(--surface-raised)",
-        borderRight: "1px solid var(--border-dim)",
+        background: "#16181d",
+        borderRight: "1px solid var(--border-mid)",
+        boxShadow: open ? "8px 0 28px rgba(0, 0, 0, 0.55)" : "none",
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
@@ -40,7 +43,7 @@ export function BlueprintPanel({ open, blueprint, onClose }: BlueprintPanelProps
           flexShrink: 0,
         }}
       >
-        <Map size={13} strokeWidth={1.5} color="var(--accent-text)" />
+        <Icon size={13} strokeWidth={1.5} color="var(--accent-text)" />
         <span
           style={{
             fontSize: 13,
@@ -52,35 +55,33 @@ export function BlueprintPanel({ open, blueprint, onClose }: BlueprintPanelProps
             whiteSpace: "nowrap",
           }}
         >
-          Blueprint
+          {title}
         </span>
         <PanelIconBtn label="Collapse panel" icon={<Minus size={11} strokeWidth={1.5} />} onClick={onClose} />
       </div>
 
       <div
         style={{
-          padding: "8px 12px 0",
-          fontSize: 11,
+          flex: 1,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 10,
+          padding: "0 24px",
+          textAlign: "center",
           color: "var(--text-secondary)",
-          lineHeight: 1.5,
-          flexShrink: 0,
+          fontSize: 11,
+          lineHeight: 1.55,
           fontFamily: "var(--font-ui)",
         }}
       >
-        Top-down schematic. Drag walls, doors, windows, and shapes to reposition.
-      </div>
-
-      <div style={{ flex: 1, minHeight: 0, padding: "8px 8px 12px", overflow: "hidden" }}>
-        <div
-          style={{
-            height: "100%",
-            background: "var(--surface-input)",
-            border: "1px solid var(--border-dim)",
-            borderRadius: 6,
-            overflow: "hidden",
-          }}
-        >
-          {blueprint}
+        <Icon size={28} strokeWidth={1} color="var(--text-ghost)" />
+        <div>
+          <div style={{ color: "var(--text-primary)", fontSize: 12, fontWeight: 500, marginBottom: 4 }}>
+            Coming soon
+          </div>
+          {description}
         </div>
       </div>
     </div>
