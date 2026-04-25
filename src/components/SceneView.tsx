@@ -1,9 +1,9 @@
 import { SplatEdit, SplatEditRgbaBlendMode, SplatEditSdf, SplatEditSdfType, SplatMesh } from "@sparkjsdev/spark";
 import { Canvas, type ThreeEvent, useFrame, useThree } from "@react-three/fiber";
 import { Grid, Html, OrbitControls, PerspectiveCamera, TransformControls, useGLTF } from "@react-three/drei";
-import { XR, createXRStore, useXR } from "@react-three/xr";
+import { XR, XROrigin, createXRStore, useXR, useXRControllerLocomotion } from "@react-three/xr";
 import { Camera, Minus, SlidersHorizontal } from "lucide-react";
-import { Component, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Component, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import {
@@ -303,8 +303,36 @@ const WALK_EYE_HEIGHT = 1.6;
  * renderer.xr into the active <XR> tree, so creating it once at import time
  * is safe even before any Canvas mounts. The button outside the Canvas calls
  * `xrStore.enterVR()` directly; useXR() inside the tree reads session state.
+ *
+ * Configuration is tuned for the "render on PC, present on Quest via Meta
+ * Quest Link / SteamVR" flow:
+ *  - We render only the splat walkthrough in VR — no UI panels, no hand UI —
+ *    so we disable hand pointers, gaze, screen input, transient pointers,
+ *    and all of the world-tracking features (planes, meshes, hit-test,
+ *    anchors, body, depth). This keeps the session lean and avoids
+ *    permission prompts the user doesn't expect.
+ *  - Controller models stay on so the user can see their Touch controllers
+ *    (and so `useXRControllerLocomotion` has a thumbstick to read).
+ *  - Framebuffer scaling is set to "high" since the laptop GPU has the
+ *    headroom that the Quest standalone GPU does not.
  */
-const xrStore = createXRStore();
+const xrStore = createXRStore({
+  controller: true,
+  hand: false,
+  transientPointer: false,
+  gaze: false,
+  screenInput: false,
+  frameBufferScaling: "high",
+  foveation: 0,
+  anchors: false,
+  handTracking: false,
+  bodyTracking: false,
+  planeDetection: false,
+  meshDetection: false,
+  hitTest: false,
+  depthSensing: false,
+  domOverlay: false,
+});
 /**
  * Half-extent of the box (centered at the origin) the splat first-person
  * camera is allowed to roam. The local pre-baked splat is roughly bedroom-
@@ -528,10 +556,7 @@ export function SceneView(props: SceneViewProps) {
         </div>
       ) : null}
       {wantsSplat && splatLoadState.status === "ready" ? (
-        <>
-          <SplatWalkHint />
-          <EnterVrButton />
-        </>
+        <SplatOverlayControls />
       ) : null}
       {splatOpacity > 0 && splatLoadState.status !== "ready" ? (
         <SplatViewportOverlay marble={props.marble} loadState={splatLoadState} />
@@ -1885,6 +1910,7 @@ function SceneContent({
         touches={VIEWPORT_TOUCHES}
       />
       <FirstPersonController active={firstPersonControlsActive} />
+      <VrSplatRig active={firstPersonActive && xrPresenting} />
       {generatedAvailable && marble.spzUrl ? (
         <MarbleSplatScene
           url={proxiedMarbleSpzUrl(marble.spzUrl)}
@@ -2819,6 +2845,68 @@ function applyLook(camera: THREE.Camera, yaw: number, pitch: number, scratch: TH
   camera.quaternion.setFromEuler(scratch);
 }
 
+/**
+ * VR locomotion rig used while a WebXR session is presenting the splat
+ * walkthrough (Quest Link / SteamVR / Air Link / native Quest browser).
+ *
+ * Why this exists:
+ *  - In a WebXR session, three.js's renderer.xr drives the camera from the
+ *    headset's pose. Mutating camera.position directly (the way the
+ *    keyboard/mouse FirstPersonController does) does NOT translate the user
+ *    — the headset pose is added on top of the camera transform every
+ *    frame, so any translation you write gets visually overwritten.
+ *  - The correct pattern is an "XR rig": a parent <XROrigin> group whose
+ *    position represents the user's *feet* in world space. The headset
+ *    pose is offset from that origin. Translating the rig translates the
+ *    user.
+ *
+ * What it does:
+ *  - Renders an <XROrigin> at world (0, 0, 0) on first activation, putting
+ *    the user at the splat center. (The local bedroom splat sits at the
+ *    world origin too.)
+ *  - Wires `useXRControllerLocomotion` to the rig: left thumbstick = walk
+ *    relative to head facing, right thumbstick = snap-turn in 30° ticks
+ *    (snap-turn is much more comfortable than smooth-turn for most people
+ *    in VR, especially over Quest Link's slight latency).
+ *  - Clamps the rig to ±SPLAT_WALK_HALF_EXTENT so the user can't drift out
+ *    of the splat. The clamp runs after the locomotion hook in useFrame,
+ *    so it overrides any movement that would push past the boundary.
+ *
+ * The component is a no-op when `active` is false, so it's safe to mount
+ * unconditionally — but we only mount it in splat mode while in VR to
+ * avoid attaching controller listeners we don't need.
+ */
+function VrSplatRig({ active }: { active: boolean }) {
+  const originRef = useRef<THREE.Group>(null);
+
+  useEffect(() => {
+    if (!active) return;
+    const origin = originRef.current;
+    if (!origin) return;
+    origin.position.set(0, 0, 0);
+    origin.rotation.set(0, 0, 0);
+  }, [active]);
+
+  useXRControllerLocomotion(
+    originRef,
+    { speed: WALK_SPEED },
+    { type: "snap", degrees: 30 },
+    "left",
+  );
+
+  useFrame(() => {
+    if (!active) return;
+    const origin = originRef.current;
+    if (!origin) return;
+    origin.position.x = THREE.MathUtils.clamp(origin.position.x, -SPLAT_WALK_HALF_EXTENT, SPLAT_WALK_HALF_EXTENT);
+    origin.position.z = THREE.MathUtils.clamp(origin.position.z, -SPLAT_WALK_HALF_EXTENT, SPLAT_WALK_HALF_EXTENT);
+    origin.position.y = 0;
+  });
+
+  if (!active) return null;
+  return <XROrigin ref={originRef} />;
+}
+
 function resetWalkKeys(keys: WalkKeys) {
   keys.forward = false;
   keys.backward = false;
@@ -3479,6 +3567,48 @@ function formatControlNumber(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(2);
 }
 
+/**
+ * Subscribes the React tree to the module-level xrStore so DOM elements
+ * rendered *outside* the <Canvas> (i.e. outside the <XR> provider, where
+ * useXR() doesn't work) can still react to XR session state — for example,
+ * to swap their hint copy or hide entirely while the user is in VR.
+ */
+function useXrPresentingExternal() {
+  return useSyncExternalStore(
+    (callback) => xrStore.subscribe(callback),
+    () => xrStore.getState().session != null,
+    () => false,
+  );
+}
+
+/**
+ * Container for the bottom WASD hint and the Enter VR button. The WASD/drag
+ * hint is meaningless once the user is in a headset (their hands aren't on
+ * the keyboard) so we hide it during a VR session and show a controller
+ * hint instead.
+ */
+function SplatOverlayControls() {
+  const xrPresenting = useXrPresentingExternal();
+  return (
+    <>
+      {xrPresenting ? <SplatVrHint /> : <SplatWalkHint />}
+      <EnterVrButton />
+    </>
+  );
+}
+
+function SplatVrHint() {
+  return (
+    <div className="pointer-events-none absolute inset-x-0 bottom-3 mx-auto w-fit max-w-[90%] rounded-md border border-[var(--border-mid)] bg-[color-mix(in_srgb,#16181d_88%,transparent)] px-3 py-1.5 text-[11px] text-[var(--text-secondary)] shadow-[0_8px_24px_rgba(0,0,0,0.35)] [backdrop-filter:blur(6px)]">
+      <span className="font-mono text-[var(--text-bright)]">L stick</span>
+      <span className="ml-1">walk</span>
+      <span className="mx-2 opacity-60">·</span>
+      <span className="font-mono text-[var(--text-bright)]">R stick</span>
+      <span className="ml-1">snap-turn</span>
+    </div>
+  );
+}
+
 function SplatWalkHint() {
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-3 mx-auto w-fit max-w-[90%] rounded-md border border-[var(--border-mid)] bg-[color-mix(in_srgb,#16181d_88%,transparent)] px-3 py-1.5 text-[11px] text-[var(--text-secondary)] shadow-[0_8px_24px_rgba(0,0,0,0.35)] [backdrop-filter:blur(6px)]">
@@ -3545,7 +3675,20 @@ function EnterVrButton() {
     }
   }, []);
 
-  if (!supported) return null;
+  // While `supported` is null we're still probing isSessionSupported(); show
+  // nothing so the button doesn't pop in/out. If the probe finished and
+  // there's no XR device, show a small hint instead of the button so first-
+  // time users know how to get a headset connected (Quest Link / SteamVR).
+  if (supported === null) return null;
+  if (!supported) {
+    return (
+      <div className="pointer-events-none absolute right-3 top-3 flex max-w-[220px] flex-col items-end gap-1 text-right">
+        <div className="pointer-events-none rounded-md border border-[var(--border-dim)] bg-[color-mix(in_srgb,#16181d_88%,transparent)] px-2.5 py-1 text-[10px] uppercase tracking-[0.16em] text-[var(--text-secondary)] shadow-[0_4px_12px_rgba(0,0,0,0.35)] [backdrop-filter:blur(6px)]">
+          VR ready · connect Quest Link
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="pointer-events-none absolute right-3 top-3 flex flex-col items-end gap-1">
@@ -3554,9 +3697,13 @@ function EnterVrButton() {
         onClick={handleEnter}
         disabled={busy}
         className="pointer-events-auto rounded-md border border-[var(--border-mid)] bg-[color-mix(in_srgb,#16181d_92%,transparent)] px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--text-bright)] shadow-[0_8px_24px_rgba(0,0,0,0.35)] [backdrop-filter:blur(6px)] transition-colors hover:bg-[color-mix(in_srgb,var(--accent-dim,#3a4250)_60%,#16181d)] disabled:cursor-not-allowed disabled:opacity-60"
+        title="Send the splat to your connected headset (Meta Quest Link, SteamVR, or native browser)"
       >
         {busy ? "Entering…" : "Enter VR"}
       </button>
+      <div className="pointer-events-none text-[10px] uppercase tracking-[0.16em] text-[var(--text-secondary)] opacity-80">
+        Quest Link · SteamVR
+      </div>
       {error ? (
         <div className="pointer-events-none rounded-sm bg-[color-mix(in_srgb,#16181d_92%,transparent)] px-2 py-1 text-[10px] text-[var(--color-warning,#f5a25d)] shadow-[0_4px_12px_rgba(0,0,0,0.35)]">
           {error}
