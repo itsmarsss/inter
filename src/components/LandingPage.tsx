@@ -64,8 +64,10 @@ export default function LandingPage({ isTilting, onEnter }: LandingPageProps) {
       >
         {/*
          * The grid element rotates around its bottom edge (transformOrigin 100%).
-         * Start: scale(1.3) = zoomed in.  End: rotateX(65deg) scale(1.0) = floor perspective.
-         * CSS applies transforms right-to-left: scale first, then rotateX.
+         * Start: flat, zoomed in.
+         * End: rotateX(65deg) floor tilt + rotateZ(43deg) clockwise spin to match the
+         * SceneView camera azimuth (~43° from +Z toward +X at position [6.5, 5.2, 7]).
+         * CSS applies transforms right-to-left: scale → rotateZ → rotateX.
          */}
         <div
           style={{
@@ -76,8 +78,8 @@ export default function LandingPage({ isTilting, onEnter }: LandingPageProps) {
               ? "transform 1400ms cubic-bezier(0.4, 0, 0.2, 1)"
               : "none",
             transform: isTilting
-              ? "rotateX(65deg) scale(1.0)"
-              : "rotateX(0deg) scale(1.3)",
+              ? "rotateX(65deg) rotateZ(43deg) scale(1.0)"
+              : "rotateX(0deg) rotateZ(0deg) scale(1.3)",
           }}
         >
           <RippleGrid
