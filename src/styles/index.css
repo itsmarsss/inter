@@ -2,21 +2,24 @@
 
 :root {
   color-scheme: dark;
-  --color-background: #0b0a08;
-  --color-surface: #151310;
-  --color-overlay: #1b1814;
-  --color-inset: #24201b;
-  --color-border: #3a332b;
-  --color-text-primary: #f4eee6;
-  --color-text-muted: #a89f94;
-  --color-accent-clay: #b8653f;
-  --color-accent-hover: #ca7951;
-  --color-accent-soft: #2d211a;
-  --color-warning: #d6a24a;
-  --color-danger: #c96b5d;
-  --shadow-panel: 0 18px 48px rgba(0, 0, 0, 0.42);
-  --shadow-float: 0 10px 30px rgba(0, 0, 0, 0.34);
-  --panel-blur: blur(18px);
+  --color-background: #080b10;
+  --color-surface: #10151d;
+  --color-overlay: #151b24;
+  --color-inset: #1c2430;
+  --color-border: #2b3543;
+  --color-text-primary: #f7fafc;
+  --color-text-muted: #a7b0bd;
+  --color-text-subtle: #778293;
+  --color-accent: #3ba7ff;
+  --color-accent-hover: #69bdff;
+  --color-accent-soft: #10283c;
+  --color-warning: #f5b84b;
+  --color-danger: #fb7185;
+  --color-focus: rgba(59, 167, 255, 0.36);
+  --color-accent-clay: var(--color-accent);
+  --shadow-panel: 0 18px 50px rgba(0, 0, 0, 0.5);
+  --shadow-float: 0 12px 32px rgba(0, 0, 0, 0.36);
+  --panel-blur: blur(16px);
   background: var(--color-background);
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
@@ -36,7 +39,9 @@ body {
   min-width: 320px;
   min-height: 100dvh;
   overflow: hidden;
-  background: var(--color-background);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(59, 167, 255, 0.14), transparent 34rem),
+    linear-gradient(180deg, #0a0f17 0%, var(--color-background) 60%);
 }
 
 button,
@@ -57,6 +62,15 @@ a {
     transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
 button:active:not(:disabled),
 a:active {
   transform: scale(0.98);
@@ -64,12 +78,12 @@ a:active {
 
 textarea::selection,
 input::selection {
-  background: color-mix(in srgb, var(--color-accent-clay) 36%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 36%, transparent);
 }
 
 .panel-resize[data-resize-handle-state="hover"],
 .panel-resize[data-resize-handle-state="drag"] {
-  background: color-mix(in srgb, var(--color-accent-clay) 46%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 46%, transparent);
 }
 
 .thin-scrollbar {

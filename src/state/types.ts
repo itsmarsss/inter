@@ -1,4 +1,22 @@
-export type ToolMode = "select" | "move" | "rotate" | "scale" | "add-wall" | "add-furniture";
+export type ToolMode =
+  | "select"
+  | "move"
+  | "rotate"
+  | "scale"
+  | "extrude"
+  | "add-wall"
+  | "add-furniture"
+  | "add-shape"
+  | "add-camera";
+
+export type WorkflowStepId = "chisel" | "panorama" | "draft" | "world";
+
+export type ProjectVisibility = "private" | "public";
+
+export type UploadStatus =
+  | { status: "idle" }
+  | { status: "ready"; fileName: string }
+  | { status: "failed"; fileName?: string; error: string };
 
 export type PanelKey =
   | "scene"
@@ -29,11 +47,14 @@ export type FurnitureAsset = {
   thumbnailUrl?: string;
   modelUrl?: string;
   taskId?: string;
+  progress?: number;
   status: FurnitureStatus;
   createdAt: number;
   error?: string;
   primitive: "sofa" | "table" | "chair" | "lamp" | "plant" | "cabinet";
 };
+
+export type FurnitureAssetMap = Map<string, FurnitureAsset>;
 
 export type FurnitureInstance = {
   id: string;
@@ -44,19 +65,50 @@ export type FurnitureInstance = {
   scale: Vec3;
 };
 
+export type ShapeKind = "cube" | "sphere" | "cylinder" | "cone" | "plane";
+
+export type CustomShape = {
+  id: string;
+  name: string;
+  kind: ShapeKind;
+  position: Vec3;
+  rotation: Vec3;
+  scale: Vec3;
+  color: string;
+};
+
+export type SceneCamera = {
+  id: string;
+  name: string;
+  position: Vec3;
+  rotation: Vec3;
+  fov: number;
+};
+
 export type SelectedRef =
   | { type: "wall"; id: WallId }
   | { type: "furniture"; id: string }
+  | { type: "shape"; id: string }
+  | { type: "camera"; id: string }
   | null;
 
 export type MarblePayload = {
   model: "marble-1.1";
   world_prompt: {
-    type: "multi-image" | "text";
+    type: "image" | "multi-image" | "text";
     text_prompt: string;
     media_assets?: Array<{ id: string; role: string }>;
   };
   metadata: {
+    capture?: {
+      role: CaptureImage["role"];
+      isPano: boolean;
+      resolution?: { width: number; height: number };
+      camera?: { position: Vec3 };
+      roomCenter: Vec3;
+      coordinateSystem: "three-y-up";
+      generationMode: "layout-pano";
+    };
     roomLayout: {
       bounds: RoomBounds;
       dimensions: { width: number; depth: number; height: number };
@@ -70,6 +122,22 @@ export type MarblePayload = {
       scale: Vec3;
       modelUrl?: string;
     }>;
+    shapes: Array<{
+      id: string;
+      name: string;
+      kind: ShapeKind;
+      position: Vec3;
+      rotation: Vec3;
+      scale: Vec3;
+      color: string;
+    }>;
+    project: {
+      title: string;
+      visibility: ProjectVisibility;
+      workflowStep: WorkflowStepId;
+      templateId: string;
+      panoramaOpacity: number;
+    };
   };
 };
 
@@ -86,16 +154,28 @@ export type MarbleResult = {
 };
 
 export type CaptureImage = {
-  role: "scene-perspective" | "scene-front" | "scene-side" | "blueprint";
+  role: "layout-pano" | "scene-perspective" | "scene-front" | "scene-side" | "blueprint";
   dataUrl: string;
+  isPano?: boolean;
+  resolution?: { width: number; height: number };
+  camera?: { position: Vec3 };
 };
 
 export type EditorState = {
+  projectTitle: string;
+  visibility: ProjectVisibility;
+  workflowStep: WorkflowStepId;
+  selectedTemplateId: string;
+  panoramaOpacity: number;
+  upload: UploadStatus;
   tool: ToolMode;
   room: RoomBounds;
   selected: SelectedRef;
   furnitureAssets: FurnitureAsset[];
   furnitureInstances: FurnitureInstance[];
+  customShapes: CustomShape[];
+  cameras: SceneCamera[];
+  activeShapeKind: ShapeKind;
   stylePrompt: string;
   marble: MarbleResult;
   panels: Record<Exclude<PanelKey, "scene">, boolean>;

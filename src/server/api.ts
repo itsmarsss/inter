@@ -10,6 +10,9 @@ const worldLabsApiKey = process.env.WORLDLABS_API_KEY;
 type CaptureImage = {
   role?: string;
   dataUrl?: string;
+  isPano?: boolean;
+  resolution?: { width?: unknown; height?: unknown };
+  camera?: unknown;
 };
 
 type StageError = Error & {
@@ -19,8 +22,10 @@ type StageError = Error & {
 type MarbleGeneratePayload = {
   model?: unknown;
   world_prompt?: {
+    type?: unknown;
     text_prompt?: unknown;
   };
+  metadata?: unknown;
 };
 
 type MarbleOperation = {
@@ -51,6 +56,16 @@ type MarbleWorld = {
       collider_mesh_url?: string;
     };
   };
+};
+
+type MeshyTask = {
+  status?: unknown;
+  progress?: unknown;
+  error?: unknown;
+  model_urls?: {
+    glb?: unknown;
+  };
+  thumbnail_url?: unknown;
 };
 
 export function jsonResponse(body: unknown, init?: ResponseInit) {
@@ -114,27 +129,45 @@ export async function generateMeshyFurniture(body: Record<string, unknown>) {
     const taskId = created.result ?? created.id;
     if (!taskId) return jsonResponse({ error: "Meshy did not return a task id." }, { status: 502 });
 
-    const task = await pollMeshyTask(taskId);
-    const status = String(task.status ?? "").toUpperCase();
-    if (!task.model_urls?.glb || ["FAILED", "EXPIRED", "CANCELED", "TIMEOUT"].includes(status)) {
-      return jsonResponse(
-        {
-          error: normalizeError(task.error) ?? "Meshy did not return a usable GLB.",
-          taskId,
-          status: task.status,
-        },
-        { status: 502 },
-      );
-    }
-
     return jsonResponse({
       taskId,
-      status: "ready",
-      modelUrl: meshyModelProxyUrl(task.model_urls.glb),
-      thumbnailUrl: task.thumbnail_url,
+      status: "generating",
     });
   } catch (error) {
     return jsonResponse({ error: errorMessage(error, "Meshy generation failed.") }, { status: 500 });
+  }
+}
+
+export async function streamMeshyFurnitureTask(taskId: string) {
+  if (!taskId) return jsonResponse({ error: "Missing Meshy task id." }, { status: 400 });
+  if (!process.env.MESHY_API_KEY) {
+    return jsonResponse({ error: "MESHY_API_KEY is not configured on the backend." }, { status: 503 });
+  }
+
+  try {
+    const streamResponse = await fetch(`${meshyBase}/text-to-3d/${encodeURIComponent(taskId)}/stream`, {
+      headers: {
+        Authorization: `Bearer ${process.env.MESHY_API_KEY}`,
+        Accept: "text/event-stream",
+      },
+    });
+
+    if (!streamResponse.ok || !streamResponse.body) {
+      return jsonResponse(
+        { error: await responseError(streamResponse, "Meshy stream failed") },
+        { status: streamResponse.status || 502 },
+      );
+    }
+
+    return new Response(normalizeMeshySseStream(streamResponse.body, taskId), {
+      headers: {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+      },
+    });
+  } catch (error) {
+    return jsonResponse({ error: errorMessage(error, "Meshy stream failed.") }, { status: 502 });
   }
 }
 
@@ -166,18 +199,23 @@ export async function generateMarbleRoom(body: Record<string, unknown>) {
   }
 
   try {
-    const capture = captures.find((item) => String(item?.role ?? "").startsWith("scene")) ?? captures[0];
+    const capture =
+      captures.find((item) => item?.role === "layout-pano") ??
+      captures.find((item) => String(item?.role ?? "").startsWith("scene")) ??
+      captures[0];
     const mediaAsset = capture ? await uploadCaptureToMarble(capture, 0) : undefined;
     const requestPayload = {
       model: payload.model,
-      display_name: "Interior blockout",
+      display_name: mediaAsset?.isPano ? "Interior layout panorama" : "Interior blockout",
       world_prompt: {
         type: mediaAsset ? "image" : "text",
         text_prompt: payload.world_prompt.text_prompt,
+        disable_recaption: Boolean(mediaAsset),
         image_prompt: mediaAsset
           ? {
               source: "media_asset",
               media_asset_id: mediaAsset.id,
+              is_pano: mediaAsset.isPano,
             }
           : undefined,
       },
@@ -214,7 +252,7 @@ export async function generateMarbleRoom(body: Record<string, unknown>) {
 
     return jsonResponse({
       status: "generating",
-      payload: requestPayload,
+      payload,
       operationId,
     });
   } catch (error) {
@@ -259,22 +297,6 @@ export async function proxyMarbleSplat(sourceUrl: string) {
   } catch (error) {
     return jsonResponse({ error: errorMessage(error, "Marble SPZ download failed.") }, { status: 502 });
   }
-}
-
-async function pollMeshyTask(taskId: string) {
-  for (let attempt = 0; attempt < 42; attempt += 1) {
-    await delay(attempt < 4 ? 1800 : 3500);
-    const response = await fetch(`${meshyBase}/text-to-3d/${taskId}`, {
-      headers: { Authorization: `Bearer ${process.env.MESHY_API_KEY}` },
-    });
-    if (!response.ok) throw new Error(await responseError(response, "Meshy polling failed"));
-
-    const task = await response.json();
-    const status = String(task.status ?? "").toUpperCase();
-    if (["SUCCEEDED", "SUCCESS", "COMPLETED", "FAILED", "EXPIRED", "CANCELED"].includes(status)) return task;
-  }
-
-  return { status: "TIMEOUT", error: "Meshy generation timed out." };
 }
 
 async function uploadCaptureToMarble(capture: CaptureImage, index: number) {
@@ -322,7 +344,7 @@ async function uploadCaptureToMarble(capture: CaptureImage, index: number) {
   if (!uploadResponse.ok) {
     throw stageError("upload_media", await responseError(uploadResponse, "Marble media upload failed"));
   }
-  return { id: mediaId, role: capture.role ?? "scene" };
+  return { id: mediaId, role: capture.role ?? "scene", isPano: Boolean(capture.isPano) };
 }
 
 async function fetchMarbleOperation(operationId: string) {
@@ -367,6 +389,76 @@ function marbleOperationResult(operationId: string, operation: MarbleOperation) 
   return { status: "generating", operationId };
 }
 
+function normalizeMeshySseStream(source: ReadableStream<Uint8Array>, taskId: string) {
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let buffer = "";
+
+  return source.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        buffer += decoder.decode(chunk, { stream: true });
+        const events = buffer.split(/\r?\n\r?\n/);
+        buffer = events.pop() ?? "";
+
+        for (const event of events) {
+          const normalized = normalizeMeshySseEvent(event, taskId);
+          if (normalized) controller.enqueue(encoder.encode(`data: ${JSON.stringify(normalized)}\n\n`));
+        }
+      },
+      flush(controller) {
+        const normalized = normalizeMeshySseEvent(buffer, taskId);
+        if (normalized) controller.enqueue(encoder.encode(`data: ${JSON.stringify(normalized)}\n\n`));
+      },
+    }),
+  );
+}
+
+function normalizeMeshySseEvent(event: string, taskId: string) {
+  const data = event
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trim())
+    .join("");
+  if (!data || data === "[DONE]") return null;
+
+  try {
+    const task = JSON.parse(data) as MeshyTask;
+    const status = String(task.status ?? "generating");
+    const glbUrl = typeof task.model_urls?.glb === "string" ? task.model_urls.glb : undefined;
+    const thumbnailUrl = typeof task.thumbnail_url === "string" ? task.thumbnail_url : undefined;
+    const terminalError = isMeshyFailedStatus(status)
+      ? normalizeError(task.error) ?? "Meshy generation failed."
+      : undefined;
+
+    return {
+      taskId,
+      status,
+      progress: normalizeProgress(task.progress, status),
+      modelUrl: glbUrl ? meshyModelProxyUrl(glbUrl) : undefined,
+      thumbnailUrl,
+      error: terminalError,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeProgress(progress: unknown, status: string) {
+  if (isMeshySuccessStatus(status)) return 100;
+  if (typeof progress !== "number" || !Number.isFinite(progress)) return undefined;
+  const scaled = progress > 0 && progress <= 1 ? progress * 100 : progress;
+  return Math.max(0, Math.min(100, Math.round(scaled)));
+}
+
+function isMeshySuccessStatus(status: string) {
+  return ["SUCCEEDED", "SUCCESS", "COMPLETED"].includes(status.toUpperCase());
+}
+
+function isMeshyFailedStatus(status: string) {
+  return ["FAILED", "EXPIRED", "CANCELED", "CANCELLED"].includes(status.toUpperCase());
+}
+
 async function responseError(response: Response, fallback: string) {
   try {
     const text = await response.text();
@@ -386,8 +478,10 @@ function streamResponse(source: Response, fallbackContentType: string) {
   const headers = new Headers();
   headers.set("Content-Type", source.headers.get("content-type") ?? fallbackContentType);
   headers.set("Cache-Control", "private, max-age=3600");
-  const contentLength = source.headers.get("content-length");
-  if (contentLength) headers.set("Content-Length", contentLength);
+  for (const header of ["content-length", "etag", "last-modified", "accept-ranges"] as const) {
+    const value = source.headers.get(header);
+    if (value) headers.set(header, value);
+  }
 
   return new Response(source.body, {
     status: source.status,
@@ -410,10 +504,6 @@ function mimeExtension(mime: string) {
   if (mime === "image/jpeg") return "jpg";
   if (mime === "image/webp") return "webp";
   return "png";
-}
-
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function normalizeError(error: unknown): string | undefined {

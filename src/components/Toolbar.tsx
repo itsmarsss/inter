@@ -1,4 +1,4 @@
-import { Box, Cuboid, MousePointer2, Move, RotateCw, Scaling, Sparkles } from "lucide-react";
+import { Box, Camera, Cuboid, MousePointer2, Move, RotateCw, Scaling, Sparkles } from "lucide-react";
 import { cn } from "../lib/cn";
 import type { ToolMode } from "../state/types";
 
@@ -15,7 +15,8 @@ const tools: Array<{ id: ToolMode; label: string; icon: React.ComponentType<{ cl
   { id: "rotate", label: "Rotate", icon: RotateCw },
   { id: "scale", label: "Scale", icon: Scaling },
   { id: "add-wall", label: "Add Wall", icon: Cuboid },
-  { id: "add-furniture", label: "Add Furniture", icon: Box },
+  { id: "add-furniture", label: "Generate 3D Model", icon: Box },
+  { id: "add-camera", label: "Add Camera", icon: Camera },
 ];
 
 export function Toolbar({ tool, onToolChange, onGenerateFinal, generating }: ToolbarProps) {
