@@ -63,6 +63,7 @@ type SceneViewProps = {
   tool: ToolMode;
   marble: MarbleResult;
   panoramaOpacity?: number;
+  displayMode: "Block" | "Splat";
   onRoomChange: (room: RoomBounds) => void;
   onInstancesChange: (instances: FurnitureInstance[]) => void;
   onShapesChange: (shapes: CustomShape[]) => void;
@@ -77,7 +78,6 @@ type SceneViewProps = {
 
 type Projector = (clientX: number, clientY: number) => Vec3 | null;
 type ViewMode = "blockout" | "generated";
-type ComparisonMode = "blockout" | "splat";
 type ObjectSplatMode = "off" | "highlight" | "fade" | "hide" | "isolate";
 type SplatLoadState = { status: "idle" | "loading" | "ready" | "error"; message?: string };
 type SplatAlignment = {
@@ -238,7 +238,6 @@ const DEFAULT_SPLAT_ALIGNMENT: SplatAlignment = {
   rotationY: 0,
   scale: 1,
 };
-const DEFAULT_COMPARISON_VALUE = 72;
 const INITIAL_CAMERA_POSITION: Vec3 = [6.5, 5.2, 7];
 const WALK_SPEED = 2.4;
 const WALK_FAST_MULTIPLIER = 1.8;
@@ -343,9 +342,6 @@ function selectedRefMatches(left: NonNullable<SelectedRef>, right: SelectedRef) 
 export function SceneView(props: SceneViewProps) {
   const projectorRef = useRef<Projector | null>(null);
   const firstPersonLockRef = useRef<() => void>(() => undefined);
-  const [comparisonMode, setComparisonMode] = useState<ComparisonMode>("blockout");
-  const [comparisonValue, setComparisonValue] = useState(0);
-  const [comparisonSpzUrl, setComparisonSpzUrl] = useState<string | undefined>();
   const [objectSplatMode, setObjectSplatMode] = useState<ObjectSplatMode>("off");
   const [splatLoadState, setSplatLoadState] = useState<SplatLoadState>({ status: "idle" });
   const [splatAlignmentState, setSplatAlignmentState] = useState<{
@@ -363,20 +359,12 @@ export function SceneView(props: SceneViewProps) {
     },
     [props.marble.spzUrl],
   );
-  const activeComparisonMode = generatedAvailable
-    ? comparisonSpzUrl === props.marble.spzUrl
-      ? comparisonMode
-      : "splat"
-    : "blockout";
-  const activeComparisonValue = generatedAvailable
-    ? comparisonSpzUrl === props.marble.spzUrl
-      ? comparisonValue
-      : Math.round((props.panoramaOpacity ?? DEFAULT_COMPARISON_VALUE / 100) * 100)
-    : 0;
-  const activeViewMode: ViewMode = generatedAvailable && activeComparisonMode !== "blockout" ? "generated" : "blockout";
-  const blockoutOpacity = generatedAvailable ? (100 - activeComparisonValue) / 100 : 1;
-  const splatOpacity = generatedAvailable ? activeComparisonValue / 100 : 0;
-  const firstPersonEnabled = firstPersonActive && activeViewMode === "generated" && splatLoadState.status !== "error";
+  const wantsSplat = props.displayMode === "Splat" && generatedAvailable;
+  const activeViewMode: ViewMode = wantsSplat ? "generated" : "blockout";
+  const blockoutOpacity = wantsSplat ? 0 : 1;
+  const splatOpacity = wantsSplat ? 1 : 0;
+  const firstPersonEnabled = firstPersonActive && wantsSplat && splatLoadState.status !== "error";
+
   const selectedCamera =
     props.selected?.type === "camera" ? props.cameras.find((camera) => camera.id === props.selected?.id) : undefined;
   const splatObjectRegions = useMemo(
@@ -388,22 +376,8 @@ export function SceneView(props: SceneViewProps) {
     : undefined;
   const objectSplatControlsVisible = generatedAvailable && splatOpacity > 0 && Boolean(selectedSplatRegion);
 
-  function selectComparisonMode(nextMode: ComparisonMode) {
-    if (!generatedAvailable && nextMode !== "blockout") return;
-    setComparisonMode(nextMode);
-    setComparisonSpzUrl(props.marble.spzUrl);
-    if (nextMode === "blockout") {
-      setComparisonValue(0);
-      setFirstPersonActive(false);
-    }
-    if (nextMode === "splat") setComparisonValue(100);
-  }
-
   function enterFirstPerson() {
-    if (!generatedAvailable) return;
-    setComparisonMode("splat");
-    setComparisonValue(100);
-    setComparisonSpzUrl(props.marble.spzUrl);
+    if (!wantsSplat) return;
     setFirstPersonActive(true);
     firstPersonLockRef.current();
   }
@@ -461,31 +435,8 @@ export function SceneView(props: SceneViewProps) {
         />
       </Canvas>
       <ToolHintBanner tool={props.tool} />
-      {generatedAvailable ? (
-      <div className="absolute right-3 bottom-12 flex min-w-0 max-w-[calc(100vw-1.5rem)] flex-col gap-1 rounded-md border border-[var(--border-dim)] bg-[var(--surface-raised)] px-2 py-1 text-xs text-[var(--text-secondary)] shadow-[0_8px_24px_rgba(0,0,0,0.45)]">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <div className="shrink-0 px-1 font-medium text-[var(--text-bright)]">
-            Compare
-          </div>
-          <div className="flex shrink-0 rounded-sm border border-[var(--border-dim)] bg-[var(--surface-input)] p-0.5">
-            {(["blockout", "splat"] as ComparisonMode[]).map((mode) => {
-              return (
-                <button
-                  key={mode}
-                  type="button"
-                  aria-pressed={activeComparisonMode === mode}
-                  className={`h-7 min-w-0 rounded-sm px-2 font-medium capitalize ${
-                    activeComparisonMode === mode
-                      ? "bg-[var(--accent-dim)] text-[var(--accent-text)]"
-                      : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-                  }`}
-                  onClick={() => selectComparisonMode(mode)}
-                >
-                  {mode === "blockout" ? "Block" : mode}
-                </button>
-              );
-            })}
-          </div>
+      {wantsSplat ? (
+        <div className="absolute right-3 bottom-12 flex flex-col gap-1 rounded-md border border-[var(--border-mid)] bg-[#16181d] px-2 py-1 text-xs shadow-[0_8px_24px_rgba(0,0,0,0.45)]">
           <button
             type="button"
             aria-pressed={firstPersonEnabled}
@@ -501,32 +452,31 @@ export function SceneView(props: SceneViewProps) {
             <Footprints className="size-3.5" />
             <span>{firstPersonEnabled ? "Exit" : "Walk"}</span>
           </button>
-        </div>
-        {objectSplatControlsVisible ? (
-          <div className="flex min-w-0 items-center gap-2 border-t border-[var(--border-dim)] pt-1">
-            <span className="shrink-0 font-medium text-[var(--text-bright)]">Object</span>
-            <span className="max-w-[7rem] truncate text-[var(--text-secondary)]">{selectedSplatRegion?.label}</span>
-            <div className="flex min-w-0 flex-1 rounded-sm border border-[var(--border-dim)] bg-[var(--surface-input)] p-0.5">
-              {OBJECT_SPLAT_MODES.map((mode) => (
-                <button
-                  key={mode.value}
-                  type="button"
-                  aria-pressed={objectSplatMode === mode.value}
-                  className={cn(
-                    "min-w-0 flex-1 rounded-sm px-1.5 py-0.5 font-medium",
-                    objectSplatMode === mode.value
-                      ? "bg-[var(--accent-dim)] text-[var(--accent-text)]"
-                      : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
-                  )}
-                  onClick={() => setObjectSplatMode(mode.value)}
-                >
-                  <span className="block truncate">{mode.label}</span>
-                </button>
-              ))}
+          {objectSplatControlsVisible ? (
+            <div className="flex min-w-0 items-center gap-2 border-t border-[var(--border-dim)] pt-1">
+              <span className="shrink-0 font-medium text-[var(--text-bright)]">Object</span>
+              <span className="max-w-[7rem] truncate text-[var(--text-secondary)]">{selectedSplatRegion?.label}</span>
+              <div className="flex min-w-0 flex-1 rounded-sm border border-[var(--border-dim)] bg-[var(--surface-input)] p-0.5">
+                {OBJECT_SPLAT_MODES.map((mode) => (
+                  <button
+                    key={mode.value}
+                    type="button"
+                    aria-pressed={objectSplatMode === mode.value}
+                    className={cn(
+                      "min-w-0 flex-1 rounded-sm px-1.5 py-0.5 font-medium",
+                      objectSplatMode === mode.value
+                        ? "bg-[var(--accent-dim)] text-[var(--accent-text)]"
+                        : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
+                    )}
+                    onClick={() => setObjectSplatMode(mode.value)}
+                  >
+                    <span className="block truncate">{mode.label}</span>
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
-        ) : null}
-      </div>
+          ) : null}
+        </div>
       ) : null}
       {splatOpacity > 0 && splatLoadState.status !== "ready" ? (
         <SplatViewportOverlay marble={props.marble} loadState={splatLoadState} />

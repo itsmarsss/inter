@@ -1,19 +1,18 @@
 "use client";
 
-import { Box, Camera, Layers2, Package, Settings2, WandSparkles } from "lucide-react";
-import { type ComponentType, useState } from "react";
+import { Box, Package, WandSparkles } from "lucide-react";
+import type { ComponentType } from "react";
+import { useState } from "react";
 
-export type RailSection = "scenes" | "objects" | "furniture" | "viewpoints" | "world";
+export type RailSection = "objects" | "furniture" | "world";
 
 const TOP_ITEMS: Array<{
   id: RailSection;
   label: string;
   icon: ComponentType<{ size?: number; strokeWidth?: number }>;
 }> = [
-  { id: "scenes", label: "Scenes", icon: Layers2 },
   { id: "objects", label: "Objects", icon: Box },
   { id: "furniture", label: "Furniture", icon: Package },
-  { id: "viewpoints", label: "Viewpoints", icon: Camera },
   { id: "world", label: "World Generation", icon: WandSparkles },
 ];
 
@@ -52,12 +51,6 @@ export function IconRail({ activeSection, panelOpen, onSectionChange }: IconRail
         />
       ))}
       <div style={{ flex: 1 }} />
-      <RailButton
-        label="Settings"
-        icon={Settings2}
-        isActive={false}
-        onClick={() => {}}
-      />
     </div>
   );
 }

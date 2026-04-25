@@ -11,6 +11,7 @@ import { generateRoomWithMarble, pollMarbleOperation } from "./api/marble";
 import { PrecisionLayout } from "./components/PrecisionLayout";
 import { SceneView } from "./components/SceneView";
 import { BlueprintView } from "./components/BlueprintView";
+import type { ViewMode } from "./components/ModeBar";
 import {
   buildFurnitureAssetMap,
   createDefaultWallSegmentation,
@@ -25,6 +26,7 @@ import type { CaptureImage, EditorState } from "./state/types";
 
 export default function App() {
   const [state, setState] = useState<EditorState>(() => ({ ...initialState }));
+  const [viewMode, setViewMode] = useState<ViewMode>("Block");
   const sceneCaptureRef = useRef<() => CaptureImage | undefined>(() => undefined);
   const blueprintCaptureRef = useRef<() => string | undefined>(() => undefined);
   const generationRunRef = useRef(0);
@@ -97,6 +99,13 @@ export default function App() {
       furnitureStreams.clear();
     };
   }, []);
+
+  // Auto-switch to splat view when a new world finishes generating, and back to Block if it's gone.
+  const splatUrl = state.marble.status === "complete" ? state.marble.spzUrl : undefined;
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setViewMode(splatUrl ? "Splat" : "Block");
+  }, [splatUrl]);
 
   async function handleGenerateFinalRoom() {
     const runId = generationRunRef.current + 1;
@@ -321,6 +330,7 @@ export default function App() {
           tool={state.tool}
           marble={state.marble}
           panoramaOpacity={state.panoramaOpacity}
+          displayMode={viewMode}
           onRoomChange={setRoom}
           onInstancesChange={setInstances}
           onShapesChange={setShapes}
@@ -366,6 +376,8 @@ export default function App() {
       tool={state.tool}
       selected={state.selected}
       activeShapeKind={state.activeShapeKind}
+      viewMode={viewMode}
+      onViewModeChange={setViewMode}
       onToolChange={setTool}
       onSelect={setSelected}
       onActiveShapeKindChange={(activeShapeKind) =>

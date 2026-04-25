@@ -1,6 +1,5 @@
 "use client";
 
-import { Camera, Layers2 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import type {
   CustomShape,
@@ -24,8 +23,8 @@ import { BottomToolbar } from "./BottomToolbar";
 import { FurniturePanel } from "./FurniturePanel";
 import { IconRail, type RailSection } from "./IconRail";
 import { MinimapPanel } from "./MinimapPanel";
+import { ModeBar, type ViewMode } from "./ModeBar";
 import { ObjectsPanel } from "./ObjectsPanel";
-import { PlaceholderPanel } from "./PlaceholderPanel";
 import { Viewport } from "./Viewport";
 import { WorldPanel } from "./WorldPanel";
 
@@ -49,6 +48,9 @@ type PrecisionLayoutProps = {
   onToolChange: (tool: ToolMode) => void;
   onSelect: (selected: SelectedRef) => void;
   onActiveShapeKindChange: (kind: ShapeKind) => void;
+
+  viewMode: ViewMode;
+  onViewModeChange: (mode: ViewMode) => void;
 
   onUploadModel: (file: File) => void;
   onAddDoor: () => void;
@@ -84,6 +86,8 @@ export function PrecisionLayout({
   onToolChange,
   onSelect,
   onActiveShapeKindChange,
+  viewMode,
+  onViewModeChange,
   onUploadModel,
   onAddDoor,
   onAddWindow,
@@ -102,6 +106,8 @@ export function PrecisionLayout({
   const [activeSection, setActiveSection] = useState<RailSection>("objects");
   const [panelOpen, setPanelOpen] = useState(true);
   const [blueprintDialogOpen, setBlueprintDialogOpen] = useState(false);
+
+  const splatAvailable = marble.status === "complete" && Boolean(marble.spzUrl);
 
   function handleSectionChange(section: RailSection) {
     if (section === activeSection && panelOpen) {
@@ -139,14 +145,6 @@ export function PrecisionLayout({
       />
 
       {/* Layer 1 — left panels (always mounted, width-animated) */}
-      <PlaceholderPanel
-        open={panelOpen && activeSection === "scenes"}
-        title="Scenes"
-        icon={Layers2}
-        description="Save and switch between scene presets."
-        onClose={() => setPanelOpen(false)}
-      />
-
       <ObjectsPanel
         open={panelOpen && activeSection === "objects"}
         tool={tool}
@@ -177,14 +175,6 @@ export function PrecisionLayout({
         onClose={() => setPanelOpen(false)}
       />
 
-      <PlaceholderPanel
-        open={panelOpen && activeSection === "viewpoints"}
-        title="Viewpoints"
-        icon={Camera}
-        description="Bookmark camera angles and walkthroughs."
-        onClose={() => setPanelOpen(false)}
-      />
-
       <WorldPanel
         open={panelOpen && activeSection === "world"}
         prompt={stylePrompt}
@@ -196,6 +186,11 @@ export function PrecisionLayout({
       />
 
       {/* Layer 2 — floating chrome (never covers viewport center) */}
+      <ModeBar
+        activeMode={viewMode}
+        onModeChange={onViewModeChange}
+        splatAvailable={splatAvailable}
+      />
       <MinimapPanel
         room={room}
         instances={furnitureInstances}
