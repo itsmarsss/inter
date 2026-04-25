@@ -81,13 +81,14 @@ export default function LandingPage({ isTilting, onEnter }: LandingPageProps) {
           }}
         >
           <RippleGrid
-            gridColor="#4f46e5"
-            rippleIntensity={isTilting ? 0.02 : 0.05}
+            gridColor="#ffffff"
+            rippleIntensity={isTilting ? 0.015 : 0.04}
             gridSize={7}
-            gridThickness={17}
-            glowIntensity={0.14}
-            vignetteStrength={0.9}
-            fadeDistance={2.2}
+            gridThickness={52}
+            glowIntensity={0}
+            opacity={0.12}
+            vignetteStrength={1.6}
+            fadeDistance={1.8}
             mouseInteraction={!isTilting}
             mouseInteractionRadius={1.3}
           />
