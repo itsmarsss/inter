@@ -15,10 +15,14 @@ import { GeometryPanel } from "./components/GeometryPanel";
 import { SceneView } from "./components/SceneView";
 import { WorkspaceLayout } from "./components/WorkspaceLayout";
 import {
+  createDefaultWallSegmentation,
+  createDoor,
   createFurnitureAsset,
   createUploadedFurnitureAsset,
+  createWindowOpening,
   buildFurnitureAssetMap,
   initialState,
+  removeWallSegment,
 } from "./state/editor";
 import type { CaptureImage, EditorState } from "./state/types";
 
@@ -258,6 +262,9 @@ export default function App() {
             instances={state.furnitureInstances}
             shapes={state.customShapes}
             cameras={state.cameras}
+            doors={state.doors}
+            windows={state.windows}
+            wallSegments={state.wallSegments}
             activeShapeKind={state.activeShapeKind}
             selected={state.selected}
             hovered={hoveredGeometry}
@@ -270,6 +277,11 @@ export default function App() {
             }
             onShapesChange={(customShapes) => setState((current) => ({ ...current, customShapes }))}
             onCamerasChange={(cameras) => setState((current) => ({ ...current, cameras }))}
+            onDoorsChange={(doors) => setState((current) => ({ ...current, doors }))}
+            onWindowsChange={(windows) => setState((current) => ({ ...current, windows }))}
+            onWallSegmentsChange={(wallSegments) =>
+              setState((current) => ({ ...current, wallSegments }))
+            }
             onSelect={(selected) => setState((current) => ({ ...current, selected }))}
             onToolChange={(tool) => setState((current) => ({ ...current, tool }))}
             registerSceneCapture={registerSceneCapture}
@@ -284,9 +296,70 @@ export default function App() {
             instances={state.furnitureInstances}
             shapes={state.customShapes}
             cameras={state.cameras}
+            doors={state.doors}
+            windows={state.windows}
+            wallSegments={state.wallSegments}
             selected={state.selected}
             onSelect={(selected) => setState((current) => ({ ...current, selected }))}
             onHover={setHoveredGeometry}
+            onAddDoor={() =>
+              setState((current) => {
+                const door = createDoor(current.room);
+                return {
+                  ...current,
+                  doors: [...current.doors, door],
+                  selected: { type: "door", id: door.id },
+                };
+              })
+            }
+            onAddWindow={() =>
+              setState((current) => {
+                const win = createWindowOpening(current.room);
+                return {
+                  ...current,
+                  windows: [...current.windows, win],
+                  selected: { type: "window", id: win.id },
+                };
+              })
+            }
+            onRemoveDoor={(id) =>
+              setState((current) => ({
+                ...current,
+                doors: current.doors.filter((door) => door.id !== id),
+                selected:
+                  current.selected?.type === "door" && current.selected.id === id
+                    ? null
+                    : current.selected,
+              }))
+            }
+            onRemoveWindow={(id) =>
+              setState((current) => ({
+                ...current,
+                windows: current.windows.filter((window) => window.id !== id),
+                selected:
+                  current.selected?.type === "window" && current.selected.id === id
+                    ? null
+                    : current.selected,
+              }))
+            }
+            onRemoveWallSegment={(wall, id) =>
+              setState((current) => ({
+                ...current,
+                wallSegments: removeWallSegment(current.wallSegments, wall, id),
+                selected:
+                  current.selected?.type === "wall-segment" && current.selected.id === id
+                    ? null
+                    : current.selected,
+              }))
+            }
+            onResetWallSegments={() =>
+              setState((current) => ({
+                ...current,
+                wallSegments: createDefaultWallSegmentation(),
+                selected:
+                  current.selected?.type === "wall-segment" ? null : current.selected,
+              }))
+            }
           />
         }
         blueprint={
@@ -296,6 +369,9 @@ export default function App() {
             assetById={assetById}
             instances={state.furnitureInstances}
             shapes={state.customShapes}
+            doors={state.doors}
+            windows={state.windows}
+            wallSegments={state.wallSegments}
             selected={state.selected}
             tool={state.tool}
             onSelect={(selected) => setState((current) => ({ ...current, selected }))}
@@ -304,6 +380,8 @@ export default function App() {
               setState((current) => ({ ...current, furnitureInstances }))
             }
             onShapesChange={(customShapes) => setState((current) => ({ ...current, customShapes }))}
+            onDoorsChange={(doors) => setState((current) => ({ ...current, doors }))}
+            onWindowsChange={(windows) => setState((current) => ({ ...current, windows }))}
             registerBlueprintCapture={registerBlueprintCapture}
           />
         }
@@ -314,6 +392,9 @@ export default function App() {
             assetById={assetById}
             instances={state.furnitureInstances}
             shapes={state.customShapes}
+            doors={state.doors}
+            windows={state.windows}
+            wallSegments={state.wallSegments}
             selected={state.selected}
             tool={state.tool}
             onSelect={(selected) => setState((current) => ({ ...current, selected }))}
@@ -322,6 +403,8 @@ export default function App() {
               setState((current) => ({ ...current, furnitureInstances }))
             }
             onShapesChange={(customShapes) => setState((current) => ({ ...current, customShapes }))}
+            onDoorsChange={(doors) => setState((current) => ({ ...current, doors }))}
+            onWindowsChange={(windows) => setState((current) => ({ ...current, windows }))}
             registerBlueprintCapture={() => undefined}
           />
         }

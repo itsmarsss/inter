@@ -5,6 +5,7 @@ import {
   Circle,
   Cuboid,
   Cylinder,
+  DoorOpen,
   Expand,
   EyeOff,
   FileUp,
@@ -12,6 +13,8 @@ import {
   Map,
   Minus,
   Plus,
+  RectangleHorizontal,
+  Scissors,
   Sparkles,
   Square,
   Triangle,
@@ -56,6 +59,9 @@ type WorkspaceLayoutProps = {
 
 const tools: Array<{ id: ToolMode; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { id: "add-wall", label: "Add Wall", icon: Cuboid },
+  { id: "cut-wall", label: "Cut wall (loop cut)", icon: Scissors },
+  { id: "add-door", label: "Add Door", icon: DoorOpen },
+  { id: "add-window", label: "Add Window", icon: RectangleHorizontal },
   { id: "add-furniture", label: "Generate 3D Model", icon: Box },
   { id: "add-shape", label: "Add Shape", icon: Plus },
   { id: "add-camera", label: "Add Camera", icon: Camera },

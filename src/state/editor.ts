@@ -1,4 +1,5 @@
 import type {
+  Door,
   EditorState,
   CustomShape,
   FurnitureAsset,
@@ -9,6 +10,9 @@ import type {
   ShapeKind,
   Vec3,
   WallId,
+  WallSegment,
+  WallSegmentation,
+  WindowOpening,
 } from "./types";
 
 export type RoomTemplate = {
@@ -68,6 +72,9 @@ export const initialState: EditorState = {
   furnitureInstances: [],
   customShapes: [],
   cameras: [],
+  doors: [createInitialDoor(initialRoom)],
+  windows: [],
+  wallSegments: createDefaultWallSegmentation(),
   activeShapeKind: "cube",
   stylePrompt:
     "Turn this blockout into a cozy Scandinavian living room with warm lighting, wood textures, plants, and a soft neutral palette.",
@@ -91,6 +98,9 @@ export function applyRoomTemplate(current: EditorState, templateId: string): Edi
     furnitureInstances: [],
     customShapes: [],
     cameras: [],
+    doors: [createInitialDoor(template.room)],
+    windows: [],
+    wallSegments: createDefaultWallSegmentation(),
     stylePrompt: template.stylePrompt,
     marble: { status: "idle" },
   };
@@ -251,6 +261,164 @@ function defaultShapeColor(kind: ShapeKind) {
   if (kind === "cone") return "#D6A24A";
   if (kind === "plane") return "#566575";
   return "#B8C2CC";
+}
+
+export function wallAxisLength(room: RoomBounds, wall: WallId) {
+  return wall === "east" || wall === "west" ? room.maxZ - room.minZ : room.maxX - room.minX;
+}
+
+export function clampWallOffset(room: RoomBounds, wall: WallId, offset: number, width: number) {
+  const length = wallAxisLength(room, wall);
+  const half = width / 2;
+  return Math.min(length / 2 - half, Math.max(-length / 2 + half, offset));
+}
+
+export function clampWindowVerticalOffset(room: RoomBounds, baseY: number, height: number) {
+  return Math.min(room.height - height - 0.05, Math.max(0.1, baseY));
+}
+
+export function createInitialDoor(room: RoomBounds): Door {
+  const width = Math.min(0.9, Math.max(0.65, (room.maxX - room.minX) * 0.16));
+  const height = Math.min(2.05, Math.max(1.75, room.height * 0.74));
+  const offset = clampWallOffset(room, "south", -((room.maxX - room.minX) / 2 - width - 0.4), width);
+  return {
+    id: createId(),
+    name: "Door",
+    wall: "south",
+    offset,
+    width,
+    height,
+  };
+}
+
+export function createDoor(room: RoomBounds, wall: WallId = "south"): Door {
+  const width = Math.min(0.9, Math.max(0.65, wallAxisLength(room, wall) * 0.16));
+  const height = Math.min(2.05, Math.max(1.75, room.height * 0.74));
+  return {
+    id: createId(),
+    name: "Door",
+    wall,
+    offset: 0,
+    width,
+    height,
+  };
+}
+
+export function createWindowOpening(room: RoomBounds, wall: WallId = "north"): WindowOpening {
+  const width = Math.min(1.4, Math.max(0.8, wallAxisLength(room, wall) * 0.22));
+  const height = Math.min(1.2, Math.max(0.7, room.height * 0.4));
+  const baseY = Math.max(0.9, room.height * 0.4);
+  return {
+    id: createId(),
+    name: "Window",
+    wall,
+    offset: 0,
+    baseY: clampWindowVerticalOffset(room, baseY, height),
+    width,
+    height,
+  };
+}
+
+export function createDefaultWallSegmentation(): WallSegmentation {
+  return {
+    north: [createSpanSegment()],
+    south: [createSpanSegment()],
+    east: [createSpanSegment()],
+    west: [createSpanSegment()],
+  };
+}
+
+function createSpanSegment(start = 0, end = 1, displacement = 0): WallSegment {
+  return { id: createId(), start, end, displacement };
+}
+
+const MIN_SEGMENT_FRAC = 0.05;
+
+export function cutWallAt(
+  segmentation: WallSegmentation,
+  wall: WallId,
+  fraction: number,
+): { next: WallSegmentation; newSegmentIds?: [string, string] } {
+  const segments = segmentation[wall];
+  const target = segments.find((segment) => fraction > segment.start && fraction < segment.end);
+  if (!target) return { next: segmentation };
+  if (fraction - target.start < MIN_SEGMENT_FRAC || target.end - fraction < MIN_SEGMENT_FRAC) {
+    return { next: segmentation };
+  }
+  const left = createSpanSegment(target.start, fraction, target.displacement);
+  const right = createSpanSegment(fraction, target.end, target.displacement);
+  const nextSegments = segments.flatMap((segment) =>
+    segment.id === target.id ? [left, right] : [segment],
+  );
+  return {
+    next: { ...segmentation, [wall]: nextSegments },
+    newSegmentIds: [left.id, right.id],
+  };
+}
+
+export function setSegmentDisplacement(
+  segmentation: WallSegmentation,
+  wall: WallId,
+  segmentId: string,
+  displacement: number,
+): WallSegmentation {
+  const segments = segmentation[wall];
+  const next = segments.map((segment) =>
+    segment.id === segmentId ? { ...segment, displacement } : segment,
+  );
+  return { ...segmentation, [wall]: next };
+}
+
+export function removeWallSegment(
+  segmentation: WallSegmentation,
+  wall: WallId,
+  segmentId: string,
+): WallSegmentation {
+  const segments = segmentation[wall];
+  const index = segments.findIndex((segment) => segment.id === segmentId);
+  if (index === -1 || segments.length === 1) return segmentation;
+  const target = segments[index];
+  const merged = [...segments];
+  if (index === 0) {
+    const right = merged[1];
+    merged.splice(0, 2, createSpanSegment(target.start, right.end, right.displacement));
+  } else if (index === segments.length - 1) {
+    const left = merged[index - 1];
+    merged.splice(index - 1, 2, createSpanSegment(left.start, target.end, left.displacement));
+  } else {
+    const left = merged[index - 1];
+    const right = merged[index + 1];
+    merged.splice(
+      index - 1,
+      3,
+      createSpanSegment(left.start, target.end, left.displacement),
+      createSpanSegment(target.end, right.end, right.displacement),
+    );
+  }
+  return { ...segmentation, [wall]: merged };
+}
+
+export function findSegmentAtFraction(segments: WallSegment[], fraction: number): WallSegment {
+  for (const segment of segments) {
+    if (fraction >= segment.start && fraction <= segment.end) return segment;
+  }
+  return segments[Math.max(0, Math.min(segments.length - 1, Math.floor(fraction * segments.length)))];
+}
+
+export function offsetToFraction(room: RoomBounds, wall: WallId, offset: number): number {
+  const length = wallAxisLength(room, wall);
+  if (length === 0) return 0.5;
+  return Math.min(1, Math.max(0, offset / length + 0.5));
+}
+
+export function fractionToOffset(room: RoomBounds, wall: WallId, fraction: number): number {
+  const length = wallAxisLength(room, wall);
+  return (fraction - 0.5) * length;
+}
+
+export function isSegmentationDefault(segmentation: WallSegmentation, wall: WallId) {
+  const segments = segmentation[wall];
+  return segments.length === 1 && segments[0].displacement === 0;
 }
 
 function inferPrimitive(prompt: string): FurnitureAsset["primitive"] {
