@@ -3444,13 +3444,16 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
   const frameColor = fadeSceneColor(SCENE_COLORS.windowFrame, opacity);
   const glassColor = fadeSceneColor(selected ? SCENE_COLORS.wallSelected : SCENE_COLORS.windowGlass, opacity);
   const highlight = selected || hovered;
-  const glassDepth = WALL_THICKNESS + 0.04;
+  const glassDepth = WALL_THICKNESS - 0.02;
   const frameDepth = WALL_THICKNESS + 0.06;
+  const frameThickness = 0.08;
   const fullyVisible = opacity >= 0.99;
-  const frameAlpha = 0.95 * opacity;
-  const frameOpaque = fullyVisible && frameAlpha >= 0.99;
-  const mullionAlpha = 0.9 * opacity;
-  const mullionOpaque = fullyVisible && mullionAlpha >= 0.99;
+  const frameAlpha = fullyVisible ? 1 : 0.95 * opacity;
+  const frameOpaque = fullyVisible;
+  const mullionAlpha = fullyVisible ? 1 : 0.9 * opacity;
+  const mullionOpaque = fullyVisible;
+  const innerWidth = Math.max(0.05, window.width - frameThickness * 2);
+  const innerHeight = Math.max(0.05, window.height - frameThickness * 2);
 
   return (
     <group
@@ -3460,8 +3463,8 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
       onPointerOut={onPointerOut}
       onPointerDown={onPointerDown}
     >
-      <mesh renderOrder={2}>
-        <boxGeometry args={[window.width, window.height, glassDepth]} />
+      <mesh renderOrder={1}>
+        <boxGeometry args={[innerWidth, innerHeight, glassDepth]} />
         <meshStandardMaterial
           color={glassColor}
           roughness={0.18}
@@ -3473,8 +3476,8 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
           depthWrite={false}
         />
       </mesh>
-      <mesh position={[-window.width / 2, 0, 0]} renderOrder={1}>
-        <boxGeometry args={[0.05, window.height, frameDepth]} />
+      <mesh position={[-window.width / 2 + frameThickness / 2, 0, 0]} renderOrder={2}>
+        <boxGeometry args={[frameThickness, window.height, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
           transparent={!frameOpaque}
@@ -3482,8 +3485,8 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
           depthWrite={frameOpaque}
         />
       </mesh>
-      <mesh position={[window.width / 2, 0, 0]} renderOrder={1}>
-        <boxGeometry args={[0.05, window.height, frameDepth]} />
+      <mesh position={[window.width / 2 - frameThickness / 2, 0, 0]} renderOrder={2}>
+        <boxGeometry args={[frameThickness, window.height, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
           transparent={!frameOpaque}
@@ -3491,8 +3494,8 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
           depthWrite={frameOpaque}
         />
       </mesh>
-      <mesh position={[0, window.height / 2, 0]} renderOrder={1}>
-        <boxGeometry args={[window.width + 0.1, 0.05, frameDepth]} />
+      <mesh position={[0, window.height / 2 - frameThickness / 2, 0]} renderOrder={2}>
+        <boxGeometry args={[innerWidth, frameThickness, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
           transparent={!frameOpaque}
@@ -3500,8 +3503,8 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
           depthWrite={frameOpaque}
         />
       </mesh>
-      <mesh position={[0, -window.height / 2, 0]} renderOrder={1}>
-        <boxGeometry args={[window.width + 0.1, 0.05, frameDepth]} />
+      <mesh position={[0, -window.height / 2 + frameThickness / 2, 0]} renderOrder={2}>
+        <boxGeometry args={[innerWidth, frameThickness, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
           transparent={!frameOpaque}
@@ -3509,8 +3512,8 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
           depthWrite={frameOpaque}
         />
       </mesh>
-      <mesh position={[0, 0, 0]} renderOrder={1}>
-        <boxGeometry args={[0.04, window.height, frameDepth]} />
+      <mesh position={[0, 0, 0]} renderOrder={2}>
+        <boxGeometry args={[0.04, innerHeight, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
           transparent={!mullionOpaque}
@@ -3518,8 +3521,8 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
           depthWrite={mullionOpaque}
         />
       </mesh>
-      <mesh position={[0, 0, 0]} renderOrder={1}>
-        <boxGeometry args={[window.width, 0.04, frameDepth]} />
+      <mesh position={[0, 0, 0]} renderOrder={2}>
+        <boxGeometry args={[innerWidth, 0.04, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
           transparent={!mullionOpaque}
