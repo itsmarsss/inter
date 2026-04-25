@@ -1,7 +1,7 @@
 import { SplatEdit, SplatEditRgbaBlendMode, SplatEditSdf, SplatEditSdfType, SplatMesh } from "@sparkjsdev/spark";
 import { Canvas, type ThreeEvent, useFrame, useThree } from "@react-three/fiber";
 import { Grid, Html, OrbitControls, PerspectiveCamera, PointerLockControls, TransformControls, useGLTF } from "@react-three/drei";
-import { Camera, Footprints } from "lucide-react";
+import { Camera, Footprints, Minus, SlidersHorizontal } from "lucide-react";
 import { Component, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl, PointerLockControls as PointerLockControlsImpl } from "three-stdlib";
@@ -50,6 +50,7 @@ type SceneViewProps = {
   onShapesChange: (shapes: CustomShape[]) => void;
   onCamerasChange: (cameras: SceneCamera[]) => void;
   onSelect: (selected: SelectedRef) => void;
+  onToolChange: (tool: ToolMode) => void;
   registerSceneCapture: (capture: () => CaptureImage | undefined) => void;
 };
 
@@ -126,6 +127,7 @@ const SCENE_COLORS = {
 } as const;
 
 const EDITING_MOUSE_BUTTONS: OrbitControlsImpl["mouseButtons"] = {
+  LEFT: THREE.MOUSE.ROTATE,
   MIDDLE: THREE.MOUSE.ROTATE,
   RIGHT: THREE.MOUSE.PAN,
 };
@@ -379,78 +381,78 @@ export function SceneView(props: SceneViewProps) {
           setProjector={(projector) => (projectorRef.current = projector)}
         />
       </Canvas>
-      <div className="absolute left-1/2 top-3 flex min-w-0 -translate-x-1/2 flex-col items-stretch gap-2 rounded-md border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-overlay)_86%,transparent)] px-2 py-1.5 text-xs text-[var(--color-text-muted)] shadow-[var(--shadow-float)] [backdrop-filter:var(--panel-blur)] sm:min-w-[22rem]">
-        <div className="px-1 font-medium text-[var(--color-text-primary)]">
-          {generatedAvailable ? "Compare room" : "Blockout room"}
+      <div className="absolute left-1/2 top-3 flex min-w-0 max-w-[calc(100vw-1.5rem)] -translate-x-1/2 flex-col gap-1 rounded-md border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-overlay)_86%,transparent)] px-2 py-1 text-xs text-[var(--color-text-muted)] shadow-[var(--shadow-float)] [backdrop-filter:var(--panel-blur)]">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <div className="shrink-0 px-1 font-medium text-[var(--color-text-primary)]">
+            {generatedAvailable ? "Compare" : "Blockout"}
+          </div>
+          <div className="flex shrink-0 rounded-sm border border-[var(--color-border)] bg-[var(--color-inset)] p-0.5">
+            {(["blockout", "blend", "splat"] as ComparisonMode[]).map((mode) => {
+              const disabled = !generatedAvailable && mode !== "blockout";
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  aria-pressed={activeComparisonMode === mode}
+                  disabled={disabled}
+                  className={`h-7 min-w-0 rounded-sm px-2 font-medium capitalize ${
+                    activeComparisonMode === mode
+                      ? "bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
+                      : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                  } ${disabled ? "cursor-not-allowed opacity-45 hover:text-[var(--color-text-muted)]" : ""}`}
+                  onClick={() => selectComparisonMode(mode)}
+                >
+                  {mode === "blockout" ? "Block" : mode}
+                </button>
+              );
+            })}
+          </div>
+          {generatedAvailable ? (
+            <label className="grid min-w-[11rem] flex-1 grid-cols-[auto_minmax(6rem,1fr)_2.25rem] items-center gap-2">
+              <span className="font-medium text-[var(--color-text-primary)]">Mix</span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={activeComparisonValue}
+                aria-label="Blockout to splat comparison"
+                className="h-2 min-w-0 accent-[var(--color-accent)]"
+                onChange={(event) => updateComparisonValue(Number(event.target.value))}
+              />
+              <span className="text-right tabular-nums text-[var(--color-text-primary)]">{activeComparisonValue}%</span>
+            </label>
+          ) : null}
+          {generatedAvailable ? (
+            <button
+              type="button"
+              aria-pressed={firstPersonEnabled}
+              aria-label={firstPersonEnabled ? "Exit first-person view" : "Enter first-person view"}
+              title={firstPersonEnabled ? "Exit first-person view" : "Enter first-person view"}
+              className={`flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-sm border border-[var(--color-border)] px-2 font-medium ${
+                firstPersonEnabled
+                  ? "bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
+                  : "bg-[var(--color-surface)] text-[var(--color-text-primary)] hover:bg-[var(--color-inset)]"
+              }`}
+              onClick={firstPersonEnabled ? exitFirstPerson : enterFirstPerson}
+            >
+              <Footprints className="size-3.5" />
+              <span>{firstPersonEnabled ? "Exit" : "Walk"}</span>
+            </button>
+          ) : null}
         </div>
-        <div className="flex rounded-sm border border-[var(--color-border)] bg-[var(--color-inset)] p-0.5">
-          {(["blockout", "blend", "splat"] as ComparisonMode[]).map((mode) => {
-            const disabled = !generatedAvailable && mode !== "blockout";
-            return (
-              <button
-                key={mode}
-                type="button"
-                aria-pressed={activeComparisonMode === mode}
-                disabled={disabled}
-                className={`min-w-0 flex-1 rounded-sm px-2 py-1 font-medium capitalize ${
-                  activeComparisonMode === mode
-                    ? "bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
-                    : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
-                } ${disabled ? "cursor-not-allowed opacity-45 hover:text-[var(--color-text-muted)]" : ""}`}
-                onClick={() => selectComparisonMode(mode)}
-              >
-                {mode === "blockout" ? "Block out" : mode}
-              </button>
-            );
-          })}
-        </div>
-        {generatedAvailable ? (
-          <button
-            type="button"
-            aria-pressed={firstPersonEnabled}
-            aria-label={firstPersonEnabled ? "Exit first-person view" : "Enter first-person view"}
-            title={firstPersonEnabled ? "Exit first-person view" : "Enter first-person view"}
-            className={`flex h-8 items-center justify-center gap-2 rounded-sm border border-[var(--color-border)] px-2 font-medium ${
-              firstPersonEnabled
-                ? "bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
-                : "bg-[var(--color-surface)] text-[var(--color-text-primary)] hover:bg-[var(--color-inset)]"
-            }`}
-            onClick={firstPersonEnabled ? exitFirstPerson : enterFirstPerson}
-          >
-            <Footprints className="size-4" />
-            <span>{firstPersonEnabled ? "Exit Walk" : "Walk"}</span>
-          </button>
-        ) : null}
-        {generatedAvailable ? (
-          <label className="grid grid-cols-[auto_minmax(8rem,1fr)_2.5rem] items-center gap-2 px-1">
-            <span className="font-medium text-[var(--color-text-primary)]">Mix</span>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              step={1}
-              value={activeComparisonValue}
-              aria-label="Blockout to splat comparison"
-              className="h-2 min-w-0 accent-[var(--color-accent)]"
-              onChange={(event) => updateComparisonValue(Number(event.target.value))}
-            />
-            <span className="text-right tabular-nums text-[var(--color-text-primary)]">{activeComparisonValue}%</span>
-          </label>
-        ) : null}
         {objectSplatControlsVisible ? (
-          <div className="grid gap-1 px-1">
-            <div className="flex items-center justify-between gap-2">
-              <span className="font-medium text-[var(--color-text-primary)]">Object splat</span>
-              <span className="max-w-[8rem] truncate text-[var(--color-text-muted)]">{selectedSplatRegion?.label}</span>
-            </div>
-            <div className="flex rounded-sm border border-[var(--color-border)] bg-[var(--color-inset)] p-0.5">
+          <div className="flex min-w-0 items-center gap-2 border-t border-[var(--color-border)] pt-1">
+            <span className="shrink-0 font-medium text-[var(--color-text-primary)]">Object</span>
+            <span className="max-w-[7rem] truncate text-[var(--color-text-muted)]">{selectedSplatRegion?.label}</span>
+            <div className="flex min-w-0 flex-1 rounded-sm border border-[var(--color-border)] bg-[var(--color-inset)] p-0.5">
               {OBJECT_SPLAT_MODES.map((mode) => (
                 <button
                   key={mode.value}
                   type="button"
                   aria-pressed={objectSplatMode === mode.value}
                   className={cn(
-                    "min-w-0 flex-1 rounded-sm px-1.5 py-1 font-medium",
+                    "min-w-0 flex-1 rounded-sm px-1.5 py-0.5 font-medium",
                     objectSplatMode === mode.value
                       ? "bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
                       : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]",
@@ -503,6 +505,7 @@ function SceneContent({
   onShapesChange,
   onCamerasChange,
   onSelect,
+  onToolChange,
   registerSceneCapture,
   marble,
   viewMode,
@@ -880,12 +883,12 @@ function SceneContent({
     if (viewMode !== "blockout") return;
     if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
 
-    event.stopPropagation();
     if (tool !== "add-shape" && tool !== "add-camera") {
       onSelect(null);
       return;
     }
 
+    event.stopPropagation();
     const point = projectPointerToFloor(event.clientX, event.clientY);
     if (!point) return;
 
@@ -899,10 +902,11 @@ function SceneContent({
     const shape = createCustomShape(activeShapeKind, clampToRoom(point, room));
     onShapesChange([...shapes, shape]);
     onSelect({ type: "shape", id: shape.id });
+    onToolChange("select");
   }
 
   function handleWallPointerDown(wall: WallId, event: ThreeEvent<PointerEvent>) {
-    if (blockoutOpacity <= 0 || firstPersonActive) return;
+    if (viewMode !== "blockout") return;
     if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
 
     event.stopPropagation();
@@ -1025,7 +1029,7 @@ function SceneContent({
           room={room}
           selected={selected}
           hovered={hoveredWall ? { type: "wall", id: hoveredWall } : hovered}
-          editable={blockoutOpacity > 0 && !firstPersonActive}
+          editable={viewMode === "blockout"}
           opacity={blockoutOpacity}
           onReferenceSelect={() => onSelect(null)}
           onWallPointerDown={handleWallPointerDown}
@@ -1766,6 +1770,171 @@ function dataUrlByteLength(dataUrl: string) {
   return Math.ceil(dataUrl.length * 0.75);
 }
 
+type DockedViewportIcon = {
+  edge: "left" | "right" | "top" | "bottom";
+  offset: number;
+};
+
+function dockedViewportIconFromRect(rect: DOMRect): DockedViewportIcon {
+  const width = typeof window === "undefined" ? 1280 : window.innerWidth;
+  const height = typeof window === "undefined" ? 800 : window.innerHeight;
+  const distances = [
+    { edge: "left" as const, value: rect.left },
+    { edge: "right" as const, value: width - rect.right },
+    { edge: "top" as const, value: rect.top },
+    { edge: "bottom" as const, value: height - rect.bottom },
+  ].sort((left, right) => left.value - right.value);
+  const edge = distances[0].edge;
+  const centerX = rect.left + rect.width / 2;
+  const centerY = rect.top + rect.height / 2;
+
+  return {
+    edge,
+    offset:
+      edge === "left" || edge === "right"
+        ? Math.min(height - 48, Math.max(48, centerY))
+        : Math.min(width - 48, Math.max(48, centerX)),
+  };
+}
+
+function dockedViewportIconStyle(dock: DockedViewportIcon) {
+  if (dock.edge === "left") return { left: "0.75rem", top: dock.offset, transform: "translateY(-50%)" };
+  if (dock.edge === "right") return { right: "0.75rem", top: dock.offset, transform: "translateY(-50%)" };
+  if (dock.edge === "top") return { left: dock.offset, top: "0.75rem", transform: "translateX(-50%)" };
+  return { left: dock.offset, bottom: "0.75rem", transform: "translateX(-50%)" };
+}
+
+function DraggableViewportPanel({
+  title,
+  icon: Icon,
+  restoreLabel,
+  className,
+  defaultPlacement,
+  action,
+  children,
+}: {
+  title: string;
+  icon: React.ComponentType<{ className?: string }>;
+  restoreLabel: string;
+  className?: string;
+  defaultPlacement: React.CSSProperties;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  const [panelPosition, setPanelPosition] = useState<{ x: number; y: number } | null>(null);
+  const [minimized, setMinimized] = useState<DockedViewportIcon | null>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    startX: number;
+    startY: number;
+  } | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  function beginPanelDrag(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0 || !event.isPrimary) return;
+
+    event.preventDefault();
+    const pointerId = event.pointerId;
+    const dragHandle = event.currentTarget;
+    const panelRect = panelRef.current?.getBoundingClientRect();
+    dragRef.current = {
+      pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startX: panelPosition?.x ?? panelRect?.left ?? window.innerWidth - 236,
+      startY: panelPosition?.y ?? panelRect?.top ?? 12,
+    };
+    dragHandle.setPointerCapture(pointerId);
+
+    function handlePointerMove(moveEvent: PointerEvent) {
+      const session = dragRef.current;
+      if (!session || session.pointerId !== moveEvent.pointerId) return;
+
+      setPanelPosition({
+        x: session.startX + moveEvent.clientX - session.startClientX,
+        y: session.startY + moveEvent.clientY - session.startClientY,
+      });
+    }
+
+    function endDrag(endEvent: PointerEvent) {
+      const session = dragRef.current;
+      if (!session || session.pointerId !== endEvent.pointerId) return;
+      dragRef.current = null;
+
+      try {
+        dragHandle.releasePointerCapture(pointerId);
+      } catch {
+        // Pointer capture can already be released by the browser.
+      }
+
+      window.removeEventListener("pointermove", handlePointerMove, { capture: true });
+      window.removeEventListener("pointerup", endDrag, { capture: true });
+      window.removeEventListener("pointercancel", endDrag, { capture: true });
+    }
+
+    window.addEventListener("pointermove", handlePointerMove, { capture: true });
+    window.addEventListener("pointerup", endDrag, { capture: true });
+    window.addEventListener("pointercancel", endDrag, { capture: true });
+  }
+
+  function minimizePanel() {
+    const rect = panelRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setMinimized(dockedViewportIconFromRect(rect));
+  }
+
+  if (minimized) {
+    return (
+      <button
+        type="button"
+        aria-label={restoreLabel}
+        title={restoreLabel}
+        className="absolute grid size-10 place-items-center rounded-md border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-overlay)_94%,transparent)] text-[var(--color-text-muted)] shadow-[var(--shadow-float)] hover:bg-[var(--color-inset)] hover:text-[var(--color-text-primary)] [backdrop-filter:var(--panel-blur)]"
+        style={dockedViewportIconStyle(minimized)}
+        onClick={() => setMinimized(null)}
+      >
+        <Icon className="size-4" />
+      </button>
+    );
+  }
+
+  return (
+    <div
+      ref={panelRef}
+      className={cn(
+        "absolute rounded-md border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-overlay)_88%,transparent)] text-xs text-[var(--color-text-muted)] shadow-[var(--shadow-float)] [backdrop-filter:var(--panel-blur)]",
+        className,
+      )}
+      style={panelPosition ? { left: panelPosition.x, top: panelPosition.y } : defaultPlacement}
+    >
+      <div
+        className="flex cursor-grab items-center justify-between gap-2 border-b border-[var(--color-border)] px-2 py-1.5 active:cursor-grabbing"
+        onPointerDown={beginPanelDrag}
+      >
+        <div className="flex min-w-0 items-center gap-2 font-medium text-[var(--color-text-primary)]">
+          <Icon className="size-3.5 shrink-0 text-[var(--color-accent-hover)]" />
+          <span className="truncate">{title}</span>
+        </div>
+        <div className="flex items-center gap-1" onPointerDown={(event) => event.stopPropagation()}>
+          {action}
+          <button
+            type="button"
+            aria-label={`Minimize ${title}`}
+            title={`Minimize ${title}`}
+            className="grid size-7 place-items-center rounded-sm border border-[var(--color-border)] text-[var(--color-text-muted)] hover:bg-[var(--color-inset)] hover:text-[var(--color-text-primary)]"
+            onClick={minimizePanel}
+          >
+            <Minus className="size-3.5" />
+          </button>
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
 function SplatAlignmentControls({
   alignment,
   defaultAlignment,
@@ -1786,9 +1955,13 @@ function SplatAlignmentControls({
   }
 
   return (
-    <div className="absolute right-3 top-3 w-56 rounded-md border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-overlay)_88%,transparent)] p-2 text-xs text-[var(--color-text-muted)] shadow-[var(--shadow-float)] [backdrop-filter:var(--panel-blur)]">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="font-medium text-[var(--color-text-primary)]">Splat Align</div>
+    <DraggableViewportPanel
+      title="Splat Align"
+      icon={SlidersHorizontal}
+      restoreLabel="Restore Splat Align"
+      className="w-56"
+      defaultPlacement={{ right: "0.75rem", top: "0.75rem" }}
+      action={
         <button
           type="button"
           className="rounded-sm border border-[var(--color-border)] px-2 py-1 font-medium text-[var(--color-text-primary)] hover:bg-[var(--color-inset)]"
@@ -1796,8 +1969,9 @@ function SplatAlignmentControls({
         >
           Reset
         </button>
-      </div>
-      <div className="grid grid-cols-2 gap-1.5">
+      }
+    >
+      <div className="grid grid-cols-2 gap-1.5 p-2">
         <NumberControl label="X" value={alignment.position[0]} step={0.1} onChange={(value) => updatePosition(0, value)} />
         <NumberControl label="Y" value={alignment.position[1]} step={0.1} onChange={(value) => updatePosition(1, value)} />
         <NumberControl label="Z" value={alignment.position[2]} step={0.1} onChange={(value) => updatePosition(2, value)} />
@@ -1809,7 +1983,7 @@ function SplatAlignmentControls({
         />
         <NumberControl label="Scale" value={alignment.scale} step={0.05} min={0.01} onChange={updateScale} />
       </div>
-    </div>
+    </DraggableViewportPanel>
   );
 }
 

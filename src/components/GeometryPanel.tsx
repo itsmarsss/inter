@@ -2,7 +2,15 @@ import { Box, Camera, Cuboid } from "lucide-react";
 import { useMemo } from "react";
 import { buildGeometryEntries, type GeometryEntry } from "../state/geometry";
 import { cn } from "../lib/cn";
-import type { CustomShape, FurnitureAsset, FurnitureAssetMap, FurnitureInstance, RoomBounds, SceneCamera, SelectedRef } from "../state/types";
+import type {
+  CustomShape,
+  FurnitureAsset,
+  FurnitureAssetMap,
+  FurnitureInstance,
+  RoomBounds,
+  SceneCamera,
+  SelectedRef,
+} from "../state/types";
 
 type GeometryPanelProps = {
   room: RoomBounds;
@@ -16,7 +24,17 @@ type GeometryPanelProps = {
   onHover: (hovered: SelectedRef) => void;
 };
 
-export function GeometryPanel({ room, assets, assetById, instances, shapes, cameras, selected, onSelect, onHover }: GeometryPanelProps) {
+export function GeometryPanel({
+  room,
+  assets,
+  assetById,
+  instances,
+  shapes,
+  cameras,
+  selected,
+  onSelect,
+  onHover,
+}: GeometryPanelProps) {
   const entries = useMemo(
     () => buildGeometryEntries({ room, assets, assetById, instances, shapes, cameras }),
     [assetById, assets, cameras, instances, room, shapes],

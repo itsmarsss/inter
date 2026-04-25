@@ -271,6 +271,7 @@ export default function App() {
             onShapesChange={(customShapes) => setState((current) => ({ ...current, customShapes }))}
             onCamerasChange={(cameras) => setState((current) => ({ ...current, cameras }))}
             onSelect={(selected) => setState((current) => ({ ...current, selected }))}
+            onToolChange={(tool) => setState((current) => ({ ...current, tool }))}
             registerSceneCapture={registerSceneCapture}
           />
         }
