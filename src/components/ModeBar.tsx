@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-const MODES = ["Blockout", "Block", "Blend", "Splat"] as const;
+const MODES = ["Blockout", "Block", "Splat"] as const;
 export type ViewMode = (typeof MODES)[number];
 
 type ModeBarProps = {
