@@ -1,9 +1,9 @@
 "use client";
 
-import { Box, Camera, Layers2, Package, Settings2 } from "lucide-react";
+import { Box, Camera, Layers2, Package, Settings2, WandSparkles } from "lucide-react";
 import { type ComponentType, useState } from "react";
 
-export type RailSection = "scenes" | "objects" | "furniture" | "viewpoints";
+export type RailSection = "scenes" | "objects" | "furniture" | "viewpoints" | "world";
 
 const TOP_ITEMS: Array<{
   id: RailSection;
@@ -14,6 +14,7 @@ const TOP_ITEMS: Array<{
   { id: "objects", label: "Objects", icon: Box },
   { id: "furniture", label: "Furniture", icon: Package },
   { id: "viewpoints", label: "Viewpoints", icon: Camera },
+  { id: "world", label: "World Generation", icon: WandSparkles },
 ];
 
 type IconRailProps = {
