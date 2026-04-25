@@ -1,0 +1,54 @@
+/* Precision scrollbar — 3px, for asset list */
+.precision-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-mid) transparent;
+}
+.precision-scroll::-webkit-scrollbar {
+  width: 3px;
+}
+.precision-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.precision-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-mid);
+  border-radius: 2px;
+}
+.precision-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--text-ghost);
+}
+
+/* Cursor rules */
+.cursor-viewport {
+  cursor: crosshair;
+}
+
+/* Keyframes */
+@keyframes pulse-opacity {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+textarea.precision-textarea::placeholder {
+  color: var(--text-ghost);
+  font-style: italic;
+}
+
+/* Placeholder italic */
+input.precision-input::placeholder {
+  color: var(--text-ghost);
+  font-style: italic;
+}
+
+input.precision-input:focus {
+  border-color: var(--accent-border) !important;
+  outline: none;
+}
