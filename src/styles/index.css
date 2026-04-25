@@ -1,29 +1,30 @@
 @import "tailwindcss";
+@import "./tokens.css";
+@import "./global.css";
 
 :root {
   color-scheme: dark;
-  --color-background: #080b10;
-  --color-surface: #10151d;
-  --color-overlay: #151b24;
-  --color-inset: #1c2430;
-  --color-border: #2b3543;
-  --color-text-primary: #f7fafc;
-  --color-text-muted: #a7b0bd;
-  --color-text-subtle: #778293;
-  --color-accent: #3ba7ff;
-  --color-accent-hover: #69bdff;
-  --color-accent-soft: #10283c;
-  --color-warning: #f5b84b;
-  --color-danger: #fb7185;
-  --color-focus: rgba(59, 167, 255, 0.36);
+  /* Legacy tokens kept for existing components */
+  --color-background: #090a0c;
+  --color-surface: #0e1014;
+  --color-overlay: #13151a;
+  --color-inset: #1c1f26;
+  --color-border: rgba(255, 255, 255, 0.09);
+  --color-text-primary: #eceef2;
+  --color-text-muted: #9ba3af;
+  --color-text-subtle: #555c68;
+  --color-accent: #3b8eff;
+  --color-accent-hover: #6aadff;
+  --color-accent-soft: rgba(59, 142, 255, 0.10);
+  --color-warning: #e8a83a;
+  --color-danger: #e85555;
+  --color-focus: rgba(59, 142, 255, 0.28);
   --color-accent-clay: var(--color-accent);
-  --shadow-panel: 0 18px 50px rgba(0, 0, 0, 0.5);
-  --shadow-float: 0 12px 32px rgba(0, 0, 0, 0.36);
+  --shadow-panel: 0 8px 32px rgba(0, 0, 0, 0.5);
+  --shadow-float: 0 4px 16px rgba(0, 0, 0, 0.36);
   --panel-blur: blur(16px);
-  background: var(--color-background);
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
+  background: var(--surface-void);
+  font-family: var(--font-ui);
   font-synthesis: none;
   text-rendering: geometricPrecision;
   -webkit-font-smoothing: antialiased;
@@ -34,14 +35,14 @@
   box-sizing: border-box;
 }
 
+html,
 body {
   margin: 0;
+  padding: 0;
   min-width: 320px;
   min-height: 100dvh;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 50% 0%, rgba(59, 167, 255, 0.14), transparent 34rem),
-    linear-gradient(180deg, #0a0f17 0%, var(--color-background) 60%);
+  background: var(--surface-void);
 }
 
 button,
@@ -55,52 +56,29 @@ input,
 textarea,
 a {
   transition:
-    border-color 160ms cubic-bezier(0.23, 1, 0.32, 1),
-    background-color 160ms cubic-bezier(0.23, 1, 0.32, 1),
-    color 160ms cubic-bezier(0.23, 1, 0.32, 1),
-    opacity 160ms cubic-bezier(0.23, 1, 0.32, 1),
-    transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
-}
-
-button:focus-visible,
-a:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-summary:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
-}
-
-button:active:not(:disabled),
-a:active {
-  transform: scale(0.98);
+    border-color 140ms cubic-bezier(0.23, 1, 0.32, 1),
+    background-color 140ms cubic-bezier(0.23, 1, 0.32, 1),
+    color 140ms cubic-bezier(0.23, 1, 0.32, 1),
+    opacity 140ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 textarea::selection,
 input::selection {
-  background: color-mix(in srgb, var(--color-accent) 36%, transparent);
-}
-
-.panel-resize[data-resize-handle-state="hover"],
-.panel-resize[data-resize-handle-state="drag"] {
-  background: color-mix(in srgb, var(--color-accent) 46%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 28%, transparent);
 }
 
 .thin-scrollbar {
   scrollbar-width: thin;
   scrollbar-color: var(--color-border) var(--color-surface);
 }
-
-.thin-scrollbar::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-.thin-scrollbar::-webkit-scrollbar-track {
-  background: var(--color-surface);
-}
-
+.thin-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+.thin-scrollbar::-webkit-scrollbar-track { background: var(--color-surface); }
 .thin-scrollbar::-webkit-scrollbar-thumb {
   background: var(--color-border);
   border-radius: 999px;
+}
+
+.panel-resize[data-resize-handle-state="hover"],
+.panel-resize[data-resize-handle-state="drag"] {
+  background: color-mix(in srgb, var(--color-accent) 46%, transparent);
 }
