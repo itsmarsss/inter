@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useState } from "react";
+import { type CSSProperties, type ReactNode, useState } from "react";
 import type {
   CustomShape,
   Door,
@@ -114,9 +114,27 @@ export function PrecisionLayout({
   // div uses `position: absolute; inset: 0` (a full-screen positioned box),
   // so children that already use absolute positioning land in the same spot
   // they would without the wrapper.
-  const ease = "cubic-bezier(0.22, 1, 0.36, 1)";
-  const anim = (name: string, delay: number) =>
-    entering ? `${name} 0.55s ${ease} ${delay}ms both` : undefined;
+  //
+  // We also need to keep the chrome fully hidden BEFORE the `entering` phase
+  // begins. Otherwise, during the revealing-fade phase the editor is already
+  // visible (opacity 1) but no animation is applied yet, so the chrome shows
+  // at its final position. Then when the `entering` phase starts and we
+  // attach `animation: ... both`, the element snaps to the keyframes' "from"
+  // state (off-screen) for the leading delay before animating back in —
+  // producing a visible appear → hide → re-appear flash.
+  //
+  // `hasEntered` latches true the first time `entering` is true; it never
+  // flips back. Combined with `opacity: 0` when neither flag is set, the
+  // chrome stays hidden until its keyframes take over, then the keyframes'
+  // `forwards` fill mode keeps it visible afterwards.
+  // Latch: once `entering` has been true, the chrome has begun (or already
+  // finished) its entrance animation, so it should never be force-hidden
+  // again. Setting state during render (with the same value short-circuit)
+  // is the documented React pattern for deriving sticky state from props —
+  // the second render runs immediately and uses the latched value.
+  const [hasEntered, setHasEntered] = useState(entering);
+  if (entering && !hasEntered) setHasEntered(true);
+  const preHidden = !entering && !hasEntered;
 
   function handleSectionChange(section: RailSection) {
     if (section === activeSection && panelOpen) {
@@ -142,7 +160,7 @@ export function PrecisionLayout({
       <Viewport room={room}>{viewport}</Viewport>
 
       {/* Layer 1 — icon rail (slides from left) */}
-      <div style={{ position: "absolute", inset: 0, pointerEvents: "none", animation: anim("ui-from-left", 0) }}>
+      <div style={wrapperStyleFor("ui-from-left", 0, entering, preHidden)}>
         <div style={{ pointerEvents: "auto" }}>
           <IconRail
             activeSection={activeSection}
@@ -153,7 +171,7 @@ export function PrecisionLayout({
       </div>
 
       {/* Layer 1 — left panels (slide from left, slightly delayed) */}
-      <div style={{ position: "absolute", inset: 0, pointerEvents: "none", animation: anim("ui-from-left", 80) }}>
+      <div style={wrapperStyleFor("ui-from-left", 80, entering, preHidden)}>
         <div style={{ pointerEvents: "auto" }}>
           <ObjectsPanel
             open={panelOpen && activeSection === "objects"}
@@ -179,7 +197,7 @@ export function PrecisionLayout({
         </div>
       </div>
 
-      <div style={{ position: "absolute", inset: 0, pointerEvents: "none", animation: anim("ui-from-left", 80) }}>
+      <div style={wrapperStyleFor("ui-from-left", 80, entering, preHidden)}>
         <div style={{ pointerEvents: "auto" }}>
           <FurniturePanel
             open={panelOpen && activeSection === "furniture"}
@@ -191,7 +209,7 @@ export function PrecisionLayout({
         </div>
       </div>
 
-      <div style={{ position: "absolute", inset: 0, pointerEvents: "none", animation: anim("ui-from-left", 80) }}>
+      <div style={wrapperStyleFor("ui-from-left", 80, entering, preHidden)}>
         <div style={{ pointerEvents: "auto" }}>
           <WorldPanel
             open={panelOpen && activeSection === "world"}
@@ -206,7 +224,7 @@ export function PrecisionLayout({
       </div>
 
       {/* Layer 2 — floating chrome (never covers viewport center) */}
-      <div style={{ position: "absolute", inset: 0, pointerEvents: "none", animation: anim("ui-from-top", 40) }}>
+      <div style={wrapperStyleFor("ui-from-top", 40, entering, preHidden)}>
         <div style={{ pointerEvents: "auto" }}>
           <ModeBar
             activeMode={viewMode}
@@ -216,7 +234,7 @@ export function PrecisionLayout({
         </div>
       </div>
 
-      <div style={{ position: "absolute", inset: 0, pointerEvents: "none", animation: anim("ui-from-right", 80) }}>
+      <div style={wrapperStyleFor("ui-from-right", 80, entering, preHidden)}>
         <div style={{ pointerEvents: "auto" }}>
           <MinimapPanel
             room={room}
@@ -256,4 +274,24 @@ export function PrecisionLayout({
       />
     </div>
   );
+}
+
+const ENTRANCE_EASE = "cubic-bezier(0.22, 1, 0.36, 1)";
+
+// Pure helper kept outside the component so it doesn't capture refs from the
+// render scope (which would trip our `react-hooks/refs` lint rule). All
+// inputs are plain values resolved by the caller in the render body.
+function wrapperStyleFor(
+  name: string,
+  delay: number,
+  entering: boolean,
+  preHidden: boolean,
+): CSSProperties {
+  return {
+    position: "absolute",
+    inset: 0,
+    pointerEvents: "none",
+    opacity: preHidden ? 0 : undefined,
+    animation: entering ? `${name} 0.55s ${ENTRANCE_EASE} ${delay}ms both` : undefined,
+  };
 }
