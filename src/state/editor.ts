@@ -137,6 +137,30 @@ export function clampToRoom(position: Vec3, room: RoomBounds, margin = 0.35): Ve
   ];
 }
 
+/**
+ * Expands RoomBounds to cover all outward-displaced wall segments.
+ * When a segment is pushed beyond the original room boundary (negative displacement),
+ * the effective bounds must include that extension so furniture can be moved there.
+ */
+export function effectiveBoundsForRoom(room: RoomBounds, wallSegments: WallSegmentation): RoomBounds {
+  let { minX, maxX, minZ, maxZ } = room;
+
+  for (const seg of wallSegments.north) {
+    maxZ = Math.max(maxZ, room.maxZ - seg.displacement);
+  }
+  for (const seg of wallSegments.south) {
+    minZ = Math.min(minZ, room.minZ + seg.displacement);
+  }
+  for (const seg of wallSegments.east) {
+    maxX = Math.max(maxX, room.maxX - seg.displacement);
+  }
+  for (const seg of wallSegments.west) {
+    minX = Math.min(minX, room.minX + seg.displacement);
+  }
+
+  return { minX, maxX, minZ, maxZ, height: room.height };
+}
+
 export function moveWall(room: RoomBounds, wall: WallId, value: number): RoomBounds {
   const next = { ...room };
 
