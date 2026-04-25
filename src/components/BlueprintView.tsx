@@ -17,7 +17,7 @@ import type {
 } from "../state/types";
 import {
   buildFloorPolygon,
-  clampToRoom,
+  clampToFloor,
   clampWallOffset,
   findSegmentAtFraction,
   offsetToFraction,
@@ -109,13 +109,29 @@ export function BlueprintView({
   const [openingDrag, setOpeningDrag] = useState<OpeningDragSession | null>(null);
   const view = useMemo(() => {
     const padding = 1.2;
-    return {
-      x: room.minX - padding,
-      y: room.minZ - padding,
-      width: room.maxX - room.minX + padding * 2,
-      height: room.maxZ - room.minZ + padding * 2,
+    // Compute the bounding box of the actual floor polygon so expanded
+    // wall segments (negative displacement) are always visible.
+    const segmentation = wallSegments ?? {
+      north: [{ id: "n", start: 0, end: 1, displacement: 0 }],
+      south: [{ id: "s", start: 0, end: 1, displacement: 0 }],
+      east:  [{ id: "e", start: 0, end: 1, displacement: 0 }],
+      west:  [{ id: "w", start: 0, end: 1, displacement: 0 }],
     };
-  }, [room]);
+    const polygon = buildFloorPolygon(room, segmentation);
+    let minX = room.minX, maxX = room.maxX, minZ = room.minZ, maxZ = room.maxZ;
+    for (const pt of polygon) {
+      if (pt.x < minX) minX = pt.x;
+      if (pt.x > maxX) maxX = pt.x;
+      if (pt.z < minZ) minZ = pt.z;
+      if (pt.z > maxZ) maxZ = pt.z;
+    }
+    return {
+      x: minX - padding,
+      y: minZ - padding,
+      width: maxX - minX + padding * 2,
+      height: maxZ - minZ + padding * 2,
+    };
+  }, [room, wallSegments]);
   const dimensions = roomDimensions(room);
   const floorPolygonPoints = useMemo(() => {
     const segmentation =
@@ -256,7 +272,7 @@ export function BlueprintView({
     const point = pointFromPointer(event.clientX, event.clientY);
     if (!point) return;
 
-    const next = transformObjectFromPointer(objectTransform, point.x, point.y, room);
+    const next = transformObjectFromPointer(objectTransform, point.x, point.y, room, wallSegments);
 
     if (objectTransform.target.type === "furniture") {
       onInstancesChange(
@@ -622,10 +638,11 @@ function transformObjectFromPointer(
   pointerX: number,
   pointerZ: number,
   room: RoomBounds,
+  wallSegments?: WallSegmentation,
 ) {
   if (session.mode === "move") {
     return {
-      position: clampToRoom([pointerX - session.grabOffsetX, session.y, pointerZ - session.grabOffsetZ], room),
+      position: clampToFloor([pointerX - session.grabOffsetX, session.y, pointerZ - session.grabOffsetZ], room, wallSegments),
       rotation: [0, session.startRotationY, 0] as Vec3,
       scale: session.startScale,
     };

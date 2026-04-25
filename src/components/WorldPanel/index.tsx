@@ -63,21 +63,6 @@ export function WorldPanel({
         zIndex: 15,
       }}
     >
-      {/* Progress line — top edge */}
-      <div
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          height: 2,
-          width: progressPct,
-          background: hasResult ? "var(--status-ready)" : "var(--accent)",
-          transition: "width 220ms cubic-bezier(0.4, 0, 0.2, 1), background 400ms ease",
-          zIndex: 2,
-          opacity: marble.status === "idle" ? 0 : 1,
-        }}
-      />
-
       {/* Header */}
       <div
         style={{
@@ -217,24 +202,8 @@ export function WorldPanel({
                 width: progressPct,
                 background: "var(--accent)",
                 transition: "width 320ms cubic-bezier(0.4, 0, 0.2, 1)",
-                overflow: "hidden",
               }}
-            >
-              {/* Real animated sheen — communicates active work without ETA */}
-              <div
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  bottom: 0,
-                  left: 0,
-                  width: "40%",
-                  background:
-                    "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.55) 50%, transparent 100%)",
-                  animation: "loader-sheen 1.8s linear infinite",
-                  pointerEvents: "none",
-                }}
-              />
-            </div>
+            />
           </div>
         </div>
       )}

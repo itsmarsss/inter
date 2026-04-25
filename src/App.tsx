@@ -14,6 +14,7 @@ import { BlueprintView } from "./components/BlueprintView";
 import type { ViewMode } from "./components/ModeBar";
 import {
   buildFurnitureAssetMap,
+  clampToFloor,
   createDefaultWallSegmentation,
   createDoor,
   createFurnitureAsset,
@@ -262,7 +263,18 @@ export default function App({ entering = false }: { entering?: boolean }) {
   }
 
   const setRoom: React.ComponentProps<typeof SceneView>["onRoomChange"] = (room) =>
-    setState((current) => ({ ...current, room }));
+    setState((current) => ({
+      ...current,
+      room,
+      furnitureInstances: current.furnitureInstances.map((instance) => ({
+        ...instance,
+        position: clampToFloor(instance.position, room, current.wallSegments),
+      })),
+      customShapes: current.customShapes.map((shape) => ({
+        ...shape,
+        position: clampToFloor(shape.position, room, current.wallSegments),
+      })),
+    }));
   const setInstances: React.ComponentProps<typeof SceneView>["onInstancesChange"] = (furnitureInstances) =>
     setState((current) => ({ ...current, furnitureInstances }));
   const setShapes: React.ComponentProps<typeof SceneView>["onShapesChange"] = (customShapes) =>
@@ -274,7 +286,18 @@ export default function App({ entering = false }: { entering?: boolean }) {
   const setWindows: React.ComponentProps<typeof SceneView>["onWindowsChange"] = (windows) =>
     setState((current) => ({ ...current, windows }));
   const setWallSegments: React.ComponentProps<typeof SceneView>["onWallSegmentsChange"] = (wallSegments) =>
-    setState((current) => ({ ...current, wallSegments }));
+    setState((current) => ({
+      ...current,
+      wallSegments,
+      furnitureInstances: current.furnitureInstances.map((instance) => ({
+        ...instance,
+        position: clampToFloor(instance.position, current.room, wallSegments),
+      })),
+      customShapes: current.customShapes.map((shape) => ({
+        ...shape,
+        position: clampToFloor(shape.position, current.room, wallSegments),
+      })),
+    }));
   const setSelected: React.ComponentProps<typeof SceneView>["onSelect"] = (selected) =>
     setState((current) => ({ ...current, selected }));
   const setTool: React.ComponentProps<typeof SceneView>["onToolChange"] = (tool) =>
