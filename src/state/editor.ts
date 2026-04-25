@@ -138,27 +138,41 @@ export function clampToRoom(position: Vec3, room: RoomBounds, margin = 0.35): Ve
 }
 
 /**
- * Expands RoomBounds to cover all outward-displaced wall segments.
- * When a segment is pushed beyond the original room boundary (negative displacement),
- * the effective bounds must include that extension so furniture can be moved there.
+ * Clamps a position to the actual segmented floor boundary.
+ * Unlike clampToRoom (rectangular), this respects per-segment displacements:
+ * pushed-out segments allow movement beyond the original room bounds in that
+ * specific region, while pushed-in segments tighten the boundary locally.
+ *
+ * Two iterations resolve corner cases where x and z constraints interact.
  */
-export function effectiveBoundsForRoom(room: RoomBounds, wallSegments: WallSegmentation): RoomBounds {
-  let { minX, maxX, minZ, maxZ } = room;
+export function clampToFloor(
+  position: Vec3,
+  room: RoomBounds,
+  wallSegments?: WallSegmentation,
+  margin = 0.35,
+): Vec3 {
+  if (!wallSegments) return clampToRoom(position, room, margin);
 
-  for (const seg of wallSegments.north) {
-    maxZ = Math.max(maxZ, room.maxZ - seg.displacement);
-  }
-  for (const seg of wallSegments.south) {
-    minZ = Math.min(minZ, room.minZ + seg.displacement);
-  }
-  for (const seg of wallSegments.east) {
-    maxX = Math.max(maxX, room.maxX - seg.displacement);
-  }
-  for (const seg of wallSegments.west) {
-    minX = Math.min(minX, room.minX + seg.displacement);
+  const width = room.maxX - room.minX;
+  const depth = room.maxZ - room.minZ;
+  let x = position[0];
+  let z = position[2];
+
+  for (let iter = 0; iter < 2; iter++) {
+    const xFrac = width > 0 ? Math.min(1, Math.max(0, (x - room.minX) / width)) : 0.5;
+    const northSeg = findSegmentAtFraction(wallSegments.north, xFrac);
+    const southSeg = findSegmentAtFraction(wallSegments.south, xFrac);
+    z = Math.min(room.maxZ - northSeg.displacement - margin, z);
+    z = Math.max(room.minZ + southSeg.displacement + margin, z);
+
+    const zFrac = depth > 0 ? Math.min(1, Math.max(0, (z - room.minZ) / depth)) : 0.5;
+    const eastSeg = findSegmentAtFraction(wallSegments.east, zFrac);
+    const westSeg = findSegmentAtFraction(wallSegments.west, zFrac);
+    x = Math.min(room.maxX - eastSeg.displacement - margin, x);
+    x = Math.max(room.minX + westSeg.displacement + margin, x);
   }
 
-  return { minX, maxX, minZ, maxZ, height: room.height };
+  return [x, position[1], z];
 }
 
 export function moveWall(room: RoomBounds, wall: WallId, value: number): RoomBounds {
