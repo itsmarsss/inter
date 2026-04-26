@@ -122,6 +122,10 @@ export function AssetCard({ asset, selected, onSelect, onSave, saving }: AssetCa
               e.dataTransfer.setData("application/x-furniture-asset", asset.id);
               e.dataTransfer.effectAllowed = "copy";
               setDragAssetId(asset.id);
+              const ghost = document.createElement("canvas");
+              ghost.width = 1;
+              ghost.height = 1;
+              e.dataTransfer.setDragImage(ghost, 0, 0);
             }
           : undefined
       }

@@ -885,6 +885,21 @@ function SceneContent({
     setProjector(projectPointerToFloor);
   }, [projectPointerToFloor, setProjector]);
 
+  // Eagerly warm the GLTF cache for every ready asset so the drag ghost shows
+  // the real model immediately instead of the Suspense primitive fallback.
+  useEffect(() => {
+    const allAssets: FurnitureAsset[] = [...assets];
+    if (assetById) {
+      for (const [id, a] of assetById) {
+        if (!allAssets.some((x) => x.id === id)) allAssets.push(a);
+      }
+    }
+    for (const a of allAssets) {
+      if (a.modelUrl && (a.status === "ready" || a.status === "mock")) {
+        useGLTF.preload(proxiedModelUrl(a.modelUrl));
+      }
+    }
+  }, [assets, assetById]);
 
   useEffect(() => {
     const element = gl.domElement;
@@ -4244,7 +4259,9 @@ function DragGhostNode({
   const snapped = clampToFloor(position, room, wallSegments);
 
   return (
-    <group position={snapped}>
+    // Raise 3 mm above the floor so the ghost's transparent fragments don't
+    // depth-fight with the opaque floor mesh at y=0.
+    <group position={[snapped[0], snapped[1] + 0.003, snapped[2]]}>
       <Suspense fallback={<PrimitiveFurniture primitive={asset.primitive} selected={false} hovered={false} opacity={0.45} />}>
         {modelUrl ? (
           <GeneratedModelBoundary

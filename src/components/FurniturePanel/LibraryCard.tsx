@@ -21,6 +21,10 @@ export function LibraryCard({ entry, onDelete }: LibraryCardProps) {
         e.dataTransfer.setData("application/x-furniture-asset", entry.id);
         e.dataTransfer.effectAllowed = "copy";
         setDragAssetId(entry.id);
+        const ghost = document.createElement("canvas");
+        ghost.width = 1;
+        ghost.height = 1;
+        e.dataTransfer.setDragImage(ghost, 0, 0);
       }}
       onDragEnd={() => setDragAssetId(null)}
       onMouseEnter={() => setHovered(true)}
