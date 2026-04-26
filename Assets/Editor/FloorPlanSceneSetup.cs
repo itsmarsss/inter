@@ -12,6 +12,14 @@ public static class FloorPlanSceneSetup
     private const string ScenePath = "Assets/FloorPlanScene.unity";
     private const string CameraRigPrefabPath = "Packages/com.meta.xr.sdk.core/Prefabs/OVRCameraRig.prefab";
     private const string MrukPrefabPath = "Packages/com.meta.xr.mrutilitykit/Core/Tools/MRUK.prefab";
+    private static readonly Vector2 PrimaryButtonSize = new Vector2(310f, 86f);
+    private static readonly Color PanelColor = new Color(0.025f, 0.035f, 0.045f, 0.9f);
+    private static readonly Color PanelAccentColor = new Color(0f, 0.78f, 0.92f, 0.95f);
+    private static readonly Color PanelDividerColor = new Color(1f, 1f, 1f, 0.12f);
+    private static readonly Color StatusBackingColor = new Color(0.08f, 0.12f, 0.145f, 0.72f);
+    private static readonly Color TextPrimaryColor = new Color(0.93f, 0.98f, 1f, 1f);
+    private static readonly Color TextSecondaryColor = new Color(0.66f, 0.76f, 0.8f, 0.88f);
+    private static readonly Color NormalButtonColor = new Color(0.07f, 0.13f, 0.16f, 0.96f);
 
     [MenuItem("Floor Plan Scanner/Build Complete Scene")]
     public static void BuildCompleteScene()
@@ -26,9 +34,10 @@ public static class FloorPlanSceneSetup
 
         Canvas canvas = FindOrCreateCanvas(cameraRig);
         RectTransform panel = CreateOrResetPanel(canvas.transform);
-        TextMeshProUGUI statusText = CreateText(panel, "StatusText", "Ready to scan", 32f, TextAlignmentOptions.Center, new Vector2(0f, 55f), new Vector2(740f, 100f));
-        Button scanButton = CreateButton(panel, "ScanButton", "SCAN ROOM", new Vector2(0f, -75f));
-        Button exportButton = CreateButton(panel, "ExportButton", "EXPORT MESH", new Vector2(0f, -175f));
+        TextMeshProUGUI statusText = CreateText(panel, "StatusText", "Ready to scan", 30f, TextAlignmentOptions.Center, new Vector2(0f, 60f), new Vector2(700f, 112f));
+        statusText.color = TextPrimaryColor;
+        Button scanButton = CreateButton(panel, "ScanButton", "SCAN ROOM", new Vector2(-170f, -140f));
+        Button exportButton = CreateButton(panel, "ExportButton", "EXPORT MESH", new Vector2(170f, -140f));
         exportButton.interactable = false;
 
         ConfigureEventSystem(cameraRig);
@@ -45,7 +54,7 @@ public static class FloorPlanSceneSetup
     public static void ApplyProjectSettings()
     {
         PlayerSettings.SetApplicationIdentifier(BuildTargetGroup.Android, "com.itsmarsss.FloorPlanTest");
-        PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel29;
+        PlayerSettings.Android.minSdkVersion = AndroidSdkVersions.AndroidApiLevel32;
         PlayerSettings.SetScriptingBackend(BuildTargetGroup.Android, ScriptingImplementation.IL2CPP);
         PlayerSettings.Android.targetArchitectures = AndroidArchitecture.ARM64;
         PlayerSettings.SetGraphicsAPIs(BuildTarget.Android, new[] { UnityEngine.Rendering.GraphicsDeviceType.Vulkan });
@@ -95,6 +104,7 @@ public static class FloorPlanSceneSetup
 
         manager.trackingOriginType = OVRManager.TrackingOrigin.FloorLevel;
         manager.isInsightPassthroughEnabled = true;
+        ConfigurePassthroughCameras(cameraRig);
 
         SerializedObject serializedManager = new SerializedObject(manager);
         SetSerializedBool(serializedManager, "requestScenePermissionOnStartup", true);
@@ -109,6 +119,15 @@ public static class FloorPlanSceneSetup
         passthroughLayer.projectionSurfaceType = OVRPassthroughLayer.ProjectionSurfaceType.Reconstructed;
         passthroughLayer.overlayType = OVROverlay.OverlayType.Underlay;
         passthroughLayer.hidden = false;
+    }
+
+    private static void ConfigurePassthroughCameras(OVRCameraRig cameraRig)
+    {
+        foreach (Camera camera in cameraRig.GetComponentsInChildren<Camera>(true))
+        {
+            camera.clearFlags = CameraClearFlags.SolidColor;
+            camera.backgroundColor = Color.clear;
+        }
     }
 
     private static MRUK FindOrCreateMruk()
@@ -165,7 +184,7 @@ public static class FloorPlanSceneSetup
         if (cameraRig != null && cameraRig.centerEyeAnchor != null)
         {
             Transform centerEye = cameraRig.centerEyeAnchor;
-            canvas.transform.position = centerEye.position + centerEye.forward * 2f + Vector3.up * 0.35f;
+            canvas.transform.position = centerEye.position + centerEye.forward * 2f + Vector3.up * 0.55f;
             canvas.transform.rotation = Quaternion.LookRotation(canvas.transform.position - centerEye.position, Vector3.up);
         }
 
@@ -203,7 +222,7 @@ public static class FloorPlanSceneSetup
         panelObject.transform.SetParent(canvasTransform, false);
 
         RectTransform panel = panelObject.GetComponent<RectTransform>();
-        ConfigureRect(panel, Vector2.zero, new Vector2(800f, 500f));
+        ConfigureRect(panel, Vector2.zero, new Vector2(820f, 520f));
 
         Image image = panelObject.GetComponent<Image>();
         if (image == null)
@@ -211,12 +230,64 @@ public static class FloorPlanSceneSetup
             image = panelObject.AddComponent<Image>();
         }
 
-        image.color = new Color(0f, 0f, 0f, 200f / 255f);
+        image.color = PanelColor;
+        ConfigurePanelShadow(panelObject);
+        ConfigurePanelDecoration(panel);
 
-        CreateText(panel, "TitleText", "Room Scanner", 48f, TextAlignmentOptions.Top, new Vector2(0f, 185f), new Vector2(760f, 80f));
-        TextMeshProUGUI inputFeedback = CreateText(panel, "InputFeedbackText", "Aim + trigger, A scans, B exports", 24f, TextAlignmentOptions.Center, new Vector2(0f, -232f), new Vector2(740f, 40f));
-        inputFeedback.color = new Color(1f, 1f, 1f, 0.78f);
+        TextMeshProUGUI title = CreateText(panel, "TitleText", "Room Scanner", 46f, TextAlignmentOptions.Top, new Vector2(0f, 208f), new Vector2(760f, 76f));
+        title.color = TextPrimaryColor;
+        title.fontStyle = FontStyles.Bold;
+
+        TextMeshProUGUI inputFeedback = CreateText(panel, "InputFeedbackText", "Aim + trigger, A scans, B exports", 23f, TextAlignmentOptions.Center, new Vector2(0f, -236f), new Vector2(740f, 40f));
+        inputFeedback.color = TextSecondaryColor;
         return panel;
+    }
+
+    private static void ConfigurePanelShadow(GameObject panelObject)
+    {
+        Shadow shadow = panelObject.GetComponent<Shadow>();
+        if (shadow == null)
+        {
+            shadow = panelObject.AddComponent<Shadow>();
+        }
+
+        shadow.effectColor = new Color(0f, 0f, 0f, 0.42f);
+        shadow.effectDistance = new Vector2(0f, -8f);
+    }
+
+    private static void ConfigurePanelDecoration(RectTransform panel)
+    {
+        Image statusBacking = FindOrCreateImage(panel, "StatusBacking");
+        statusBacking.color = StatusBackingColor;
+        statusBacking.raycastTarget = false;
+        ConfigureRect(statusBacking.rectTransform, new Vector2(0f, 60f), new Vector2(720f, 126f));
+
+        Image accentBar = FindOrCreateImage(panel, "AccentBar");
+        accentBar.color = PanelAccentColor;
+        accentBar.raycastTarget = false;
+        ConfigureRect(accentBar.rectTransform, new Vector2(0f, 256f), new Vector2(820f, 8f));
+
+        Image divider = FindOrCreateImage(panel, "HeaderDivider");
+        divider.color = PanelDividerColor;
+        divider.raycastTarget = false;
+        ConfigureRect(divider.rectTransform, new Vector2(0f, 162f), new Vector2(740f, 2f));
+
+        statusBacking.transform.SetAsFirstSibling();
+        accentBar.transform.SetSiblingIndex(1);
+        divider.transform.SetSiblingIndex(2);
+    }
+
+    private static Image FindOrCreateImage(Transform parent, string name)
+    {
+        Transform existing = parent.Find(name);
+        if (existing != null && existing.TryGetComponent(out Image existingImage))
+        {
+            return existingImage;
+        }
+
+        GameObject imageObject = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+        imageObject.transform.SetParent(parent, false);
+        return imageObject.GetComponent<Image>();
     }
 
     private static TextMeshProUGUI CreateText(Transform parent, string name, string text, float fontSize, TextAlignmentOptions alignment, Vector2 position, Vector2 size)
@@ -242,22 +313,46 @@ public static class FloorPlanSceneSetup
         GameObject buttonObject = existing != null ? existing.gameObject : new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Button));
         buttonObject.transform.SetParent(parent, false);
 
-        ConfigureRect(buttonObject.GetComponent<RectTransform>(), position, new Vector2(300f, 80f));
+        ConfigureRect(buttonObject.GetComponent<RectTransform>(), position, PrimaryButtonSize);
 
         Image image = buttonObject.GetComponent<Image>();
-        image.color = new Color(1f, 1f, 1f, 0.92f);
+        image.color = NormalButtonColor;
 
         Button button = buttonObject.GetComponent<Button>();
         button.targetGraphic = image;
+        button.transition = Selectable.Transition.None;
+        ConfigureButtonShadow(buttonObject);
 
-        TextMeshProUGUI buttonText = CreateText(buttonObject.transform, "Text", label, 36f, TextAlignmentOptions.Center, Vector2.zero, Vector2.zero);
-        buttonText.color = Color.black;
+        TextMeshProUGUI buttonText = CreateText(buttonObject.transform, "Text", label, 32f, TextAlignmentOptions.Center, Vector2.zero, Vector2.zero);
+        buttonText.color = TextPrimaryColor;
+        buttonText.fontStyle = FontStyles.Bold;
         buttonText.rectTransform.anchorMin = Vector2.zero;
         buttonText.rectTransform.anchorMax = Vector2.one;
         buttonText.rectTransform.offsetMin = Vector2.zero;
         buttonText.rectTransform.offsetMax = Vector2.zero;
 
         return button;
+    }
+
+    private static void ConfigureButtonShadow(GameObject buttonObject)
+    {
+        Shadow shadow = buttonObject.GetComponent<Shadow>();
+        if (shadow == null)
+        {
+            shadow = buttonObject.AddComponent<Shadow>();
+        }
+
+        shadow.effectColor = new Color(0f, 0f, 0f, 0.35f);
+        shadow.effectDistance = new Vector2(0f, -4f);
+
+        Outline outline = buttonObject.GetComponent<Outline>();
+        if (outline == null)
+        {
+            outline = buttonObject.AddComponent<Outline>();
+        }
+
+        outline.effectColor = new Color(0.2f, 0.85f, 1f, 0.35f);
+        outline.effectDistance = new Vector2(1.5f, -1.5f);
     }
 
     private static void ConfigureEventSystem(OVRCameraRig cameraRig)

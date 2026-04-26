@@ -148,7 +148,6 @@ PlayerSettings:
   - {fileID: -944628639613478452, guid: 052faaac586de48259a63d0c4782560b, type: 3}
   - {fileID: 11400000, guid: 8e9040e91d756477ab57cc8d3b44a6fc, type: 2}
   - {fileID: -6952522188246413018, guid: 1e8752128269e4701aa1fbccd195b80a, type: 2}
-  - {fileID: 11400000, guid: f1883e8f15b214d02bbdc6c7ce091c64, type: 2}
   - {fileID: -2485912067874050151, guid: 35695319af28749a78fd199cee805b1f, type: 2}
   metroInputSource: 0
   wsaTransparentSwapchain: 0
@@ -179,7 +178,7 @@ PlayerSettings:
     tvOS: 0
   overrideDefaultApplicationIdentifier: 1
   AndroidBundleVersionCode: 1
-  AndroidMinSdkVersion: 29
+  AndroidMinSdkVersion: 32
   AndroidTargetSdkVersion: 34
   AndroidPreferredInstallLocation: 0
   AndroidPreferredDataLocation: 1

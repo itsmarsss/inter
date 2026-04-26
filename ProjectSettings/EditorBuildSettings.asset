@@ -12,8 +12,6 @@ EditorBuildSettings:
     path: Assets/FloorPlanScene.unity
     guid: aaf997ce019ff4f63b49a7b29bafcd00
   m_configObjects:
-    Unity.XR.Oculus.Settings: {fileID: 11400000, guid: 63621e846ff7f4627a7a0e51c7f27993, type: 2}
     com.unity.input.settings.actions: {fileID: -944628639613478452, guid: 052faaac586de48259a63d0c4782560b, type: 3}
     com.unity.xr.management.loader_settings: {fileID: 11400000, guid: 35695319af28749a78fd199cee805b1f, type: 2}
     com.unity.xr.openxr.settings4: {fileID: 11400000, guid: 1e8752128269e4701aa1fbccd195b80a, type: 2}
-    xr.sdk.mock-hmd.settings: {fileID: 11400000, guid: f1883e8f15b214d02bbdc6c7ce091c64, type: 2}

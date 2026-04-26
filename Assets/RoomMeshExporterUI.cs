@@ -20,11 +20,18 @@ public class RoomMeshExporterUI : MonoBehaviour
     public TextMeshProUGUI statusText;
 
     private const float PressFeedbackSeconds = 0.35f;
-    private static readonly Color NormalButtonColor = new Color(1f, 1f, 1f, 0.92f);
-    private static readonly Color HoverButtonColor = new Color(0.72f, 0.88f, 1f, 1f);
-    private static readonly Color PressedButtonColor = new Color(0.35f, 1f, 0.58f, 1f);
-    private static readonly Color BlockedButtonColor = new Color(1f, 0.42f, 0.35f, 1f);
-    private static readonly Color DisabledButtonColor = new Color(0.45f, 0.45f, 0.45f, 0.75f);
+    private static readonly Vector2 PrimaryButtonSize = new Vector2(310f, 86f);
+    private static readonly Color PanelColor = new Color(0.025f, 0.035f, 0.045f, 0.9f);
+    private static readonly Color PanelAccentColor = new Color(0f, 0.78f, 0.92f, 0.95f);
+    private static readonly Color PanelDividerColor = new Color(1f, 1f, 1f, 0.12f);
+    private static readonly Color StatusBackingColor = new Color(0.08f, 0.12f, 0.145f, 0.72f);
+    private static readonly Color TextPrimaryColor = new Color(0.93f, 0.98f, 1f, 1f);
+    private static readonly Color TextSecondaryColor = new Color(0.66f, 0.76f, 0.8f, 0.88f);
+    private static readonly Color NormalButtonColor = new Color(0.07f, 0.13f, 0.16f, 0.96f);
+    private static readonly Color HoverButtonColor = new Color(0.02f, 0.48f, 0.6f, 1f);
+    private static readonly Color PressedButtonColor = new Color(0.12f, 0.72f, 0.42f, 1f);
+    private static readonly Color BlockedButtonColor = new Color(0.76f, 0.18f, 0.15f, 1f);
+    private static readonly Color DisabledButtonColor = new Color(0.11f, 0.13f, 0.15f, 0.78f);
     private static readonly Color PointerColor = new Color(0.2f, 0.95f, 1f, 1f);
     private static readonly Color PreviewColor = new Color(0.18f, 0.9f, 1f, 0.82f);
 
@@ -93,6 +100,8 @@ public class RoomMeshExporterUI : MonoBehaviour
                 SetOvrManagerBool(manager, "requestScenePermissionOnStartup", true);
             }
 
+            ConfigurePassthroughCameras(cameraRig);
+
             OVRPassthroughLayer passthroughLayer = cameraRig.GetComponent<OVRPassthroughLayer>();
             if (passthroughLayer == null)
             {
@@ -117,7 +126,7 @@ public class RoomMeshExporterUI : MonoBehaviour
         {
             canvas.worldCamera = cameraRig.centerEyeAnchor.GetComponent<Camera>();
             Transform centerEye = cameraRig.centerEyeAnchor;
-            canvas.transform.position = centerEye.position + centerEye.forward * 2f + Vector3.up * 0.35f;
+            canvas.transform.position = centerEye.position + centerEye.forward * 2f + Vector3.up * 0.55f;
             canvas.transform.rotation = Quaternion.LookRotation(canvas.transform.position - centerEye.position, Vector3.up);
         }
         canvas.transform.localScale = Vector3.one * 0.00125f;
@@ -183,6 +192,15 @@ public class RoomMeshExporterUI : MonoBehaviour
         mruk.SceneSettings.DataSource = MRUK.SceneDataSource.DeviceWithPrefabFallback;
     }
 
+    private static void ConfigurePassthroughCameras(OVRCameraRig cameraRig)
+    {
+        foreach (Camera camera in cameraRig.GetComponentsInChildren<Camera>(true))
+        {
+            camera.clearFlags = CameraClearFlags.SolidColor;
+            camera.backgroundColor = Color.clear;
+        }
+    }
+
     private static void SetOvrManagerBool(OVRManager manager, string fieldName, bool value)
     {
         FieldInfo field = typeof(OVRManager).GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);
@@ -207,7 +225,7 @@ public class RoomMeshExporterUI : MonoBehaviour
         panel.anchorMax = new Vector2(0.5f, 0.5f);
         panel.pivot = new Vector2(0.5f, 0.5f);
         panel.anchoredPosition = Vector2.zero;
-        panel.sizeDelta = new Vector2(800f, 500f);
+        panel.sizeDelta = new Vector2(820f, 520f);
 
         Image panelImage = panel.GetComponent<Image>();
         if (panelImage == null)
@@ -215,13 +233,17 @@ public class RoomMeshExporterUI : MonoBehaviour
             panelImage = panel.gameObject.AddComponent<Image>();
         }
 
-        panelImage.color = new Color(0f, 0f, 0f, 200f / 255f);
+        panelImage.color = PanelColor;
+        ConfigurePanelShadow(panel.gameObject);
+        ConfigurePanelDecoration(panel);
 
         TextMeshProUGUI titleText = FindOrCreateText(panel, "TitleText");
         titleText.text = "Room Scanner";
-        titleText.fontSize = 48f;
+        titleText.fontSize = 46f;
         titleText.alignment = TextAlignmentOptions.Top;
-        ConfigureRect(titleText.rectTransform, new Vector2(0f, 185f), new Vector2(760f, 80f));
+        titleText.color = TextPrimaryColor;
+        titleText.fontStyle = FontStyles.Bold;
+        ConfigureRect(titleText.rectTransform, new Vector2(0f, 208f), new Vector2(760f, 76f));
 
         if (statusText == null)
         {
@@ -232,17 +254,18 @@ public class RoomMeshExporterUI : MonoBehaviour
         {
             statusText.transform.SetParent(panel, false);
             statusText.text = string.IsNullOrEmpty(statusText.text) ? "Ready to scan" : statusText.text;
-            statusText.fontSize = 32f;
+            statusText.fontSize = 30f;
             statusText.alignment = TextAlignmentOptions.Center;
-            ConfigureRect(statusText.rectTransform, new Vector2(0f, 55f), new Vector2(740f, 100f));
+            statusText.color = TextPrimaryColor;
+            ConfigureRect(statusText.rectTransform, new Vector2(0f, 60f), new Vector2(700f, 112f));
         }
 
         inputFeedbackText = FindOrCreateText(panel, "InputFeedbackText");
         inputFeedbackText.text = "Aim + trigger, A scans, B exports";
-        inputFeedbackText.fontSize = 24f;
+        inputFeedbackText.fontSize = 23f;
         inputFeedbackText.alignment = TextAlignmentOptions.Center;
-        inputFeedbackText.color = new Color(1f, 1f, 1f, 0.78f);
-        ConfigureRect(inputFeedbackText.rectTransform, new Vector2(0f, -232f), new Vector2(740f, 40f));
+        inputFeedbackText.color = TextSecondaryColor;
+        ConfigureRect(inputFeedbackText.rectTransform, new Vector2(0f, -236f), new Vector2(740f, 40f));
 
         if (scanButton == null)
         {
@@ -254,8 +277,8 @@ public class RoomMeshExporterUI : MonoBehaviour
             exportButton = FindOrCreateButton(panel, "ExportButton");
         }
 
-        ConfigureButton(scanButton, panel, "SCAN ROOM", new Vector2(0f, -75f));
-        ConfigureButton(exportButton, panel, "EXPORT MESH", new Vector2(0f, -175f));
+        ConfigureButton(scanButton, panel, "SCAN ROOM", new Vector2(-170f, -140f));
+        ConfigureButton(exportButton, panel, "EXPORT MESH", new Vector2(170f, -140f));
 
         scanButtonRect = scanButton != null ? scanButton.GetComponent<RectTransform>() : null;
         exportButtonRect = exportButton != null ? exportButton.GetComponent<RectTransform>() : null;
@@ -319,7 +342,7 @@ public class RoomMeshExporterUI : MonoBehaviour
         {
             if (module != inputModule)
             {
-                module.enabled = true;
+                module.enabled = false;
             }
         }
     }
@@ -499,6 +522,53 @@ public class RoomMeshExporterUI : MonoBehaviour
         return panelObject.GetComponent<RectTransform>();
     }
 
+    private static void ConfigurePanelShadow(GameObject panelObject)
+    {
+        Shadow shadow = panelObject.GetComponent<Shadow>();
+        if (shadow == null)
+        {
+            shadow = panelObject.AddComponent<Shadow>();
+        }
+
+        shadow.effectColor = new Color(0f, 0f, 0f, 0.42f);
+        shadow.effectDistance = new Vector2(0f, -8f);
+    }
+
+    private static void ConfigurePanelDecoration(RectTransform panel)
+    {
+        Image statusBacking = FindOrCreateImage(panel, "StatusBacking");
+        statusBacking.color = StatusBackingColor;
+        statusBacking.raycastTarget = false;
+        ConfigureRect(statusBacking.rectTransform, new Vector2(0f, 60f), new Vector2(720f, 126f));
+
+        Image accentBar = FindOrCreateImage(panel, "AccentBar");
+        accentBar.color = PanelAccentColor;
+        accentBar.raycastTarget = false;
+        ConfigureRect(accentBar.rectTransform, new Vector2(0f, 256f), new Vector2(820f, 8f));
+
+        Image divider = FindOrCreateImage(panel, "HeaderDivider");
+        divider.color = PanelDividerColor;
+        divider.raycastTarget = false;
+        ConfigureRect(divider.rectTransform, new Vector2(0f, 162f), new Vector2(740f, 2f));
+
+        statusBacking.transform.SetAsFirstSibling();
+        accentBar.transform.SetSiblingIndex(1);
+        divider.transform.SetSiblingIndex(2);
+    }
+
+    private static Image FindOrCreateImage(Transform parent, string objectName)
+    {
+        Transform existing = parent.Find(objectName);
+        if (existing != null && existing.TryGetComponent(out Image existingImage))
+        {
+            return existingImage;
+        }
+
+        GameObject imageObject = new GameObject(objectName, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+        imageObject.transform.SetParent(parent, false);
+        return imageObject.GetComponent<Image>();
+    }
+
     private void ConfigurePointerDot(RectTransform panel)
     {
         Transform existing = panel.Find("PointerDot");
@@ -583,12 +653,15 @@ public class RoomMeshExporterUI : MonoBehaviour
         Transform existing = parent.Find(textObjectName);
         if (existing != null && existing.TryGetComponent(out TextMeshProUGUI existingText))
         {
+            existingText.raycastTarget = false;
             return existingText;
         }
 
         GameObject textObject = new GameObject(textObjectName, typeof(RectTransform), typeof(CanvasRenderer), typeof(TextMeshProUGUI));
         textObject.transform.SetParent(parent, false);
-        return textObject.GetComponent<TextMeshProUGUI>();
+        TextMeshProUGUI text = textObject.GetComponent<TextMeshProUGUI>();
+        text.raycastTarget = false;
+        return text;
     }
 
     private static Button FindOrCreateButton(Transform parent, string buttonObjectName)
@@ -603,10 +676,11 @@ public class RoomMeshExporterUI : MonoBehaviour
         buttonObject.transform.SetParent(parent, false);
 
         Image image = buttonObject.GetComponent<Image>();
-        image.color = new Color(1f, 1f, 1f, 0.92f);
+        image.color = NormalButtonColor;
 
         Button button = buttonObject.GetComponent<Button>();
         button.targetGraphic = image;
+        button.transition = Selectable.Transition.None;
 
         FindOrCreateText(buttonObject.transform, "Text");
         return button;
@@ -620,20 +694,53 @@ public class RoomMeshExporterUI : MonoBehaviour
         }
 
         button.transform.SetParent(parent, false);
-        ConfigureRect(button.GetComponent<RectTransform>(), anchoredPosition, new Vector2(300f, 80f));
+        ConfigureRect(button.GetComponent<RectTransform>(), anchoredPosition, PrimaryButtonSize);
+
+        Image buttonImage = button.GetComponent<Image>();
+        if (buttonImage != null)
+        {
+            buttonImage.color = button.interactable ? NormalButtonColor : DisabledButtonColor;
+        }
+
+        button.transition = Selectable.Transition.None;
+        button.targetGraphic = buttonImage;
+        ConfigureButtonShadow(button.gameObject);
 
         TextMeshProUGUI buttonText = button.GetComponentInChildren<TextMeshProUGUI>(true);
         if (buttonText != null)
         {
             buttonText.text = label;
-            buttonText.fontSize = 36f;
+            buttonText.fontSize = 32f;
             buttonText.alignment = TextAlignmentOptions.Center;
+            buttonText.color = TextPrimaryColor;
+            buttonText.fontStyle = FontStyles.Bold;
             ConfigureRect(buttonText.rectTransform, Vector2.zero, Vector2.zero);
             buttonText.rectTransform.anchorMin = Vector2.zero;
             buttonText.rectTransform.anchorMax = Vector2.one;
             buttonText.rectTransform.offsetMin = Vector2.zero;
             buttonText.rectTransform.offsetMax = Vector2.zero;
         }
+    }
+
+    private static void ConfigureButtonShadow(GameObject buttonObject)
+    {
+        Shadow shadow = buttonObject.GetComponent<Shadow>();
+        if (shadow == null)
+        {
+            shadow = buttonObject.AddComponent<Shadow>();
+        }
+
+        shadow.effectColor = new Color(0f, 0f, 0f, 0.35f);
+        shadow.effectDistance = new Vector2(0f, -4f);
+
+        Outline outline = buttonObject.GetComponent<Outline>();
+        if (outline == null)
+        {
+            outline = buttonObject.AddComponent<Outline>();
+        }
+
+        outline.effectColor = new Color(0.2f, 0.85f, 1f, 0.35f);
+        outline.effectDistance = new Vector2(1.5f, -1.5f);
     }
 
     private static void ConfigureRect(RectTransform rectTransform, Vector2 anchoredPosition, Vector2 sizeDelta)
