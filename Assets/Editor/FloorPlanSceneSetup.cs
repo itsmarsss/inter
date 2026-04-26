@@ -12,14 +12,19 @@ public static class FloorPlanSceneSetup
     private const string ScenePath = "Assets/FloorPlanScene.unity";
     private const string CameraRigPrefabPath = "Packages/com.meta.xr.sdk.core/Prefabs/OVRCameraRig.prefab";
     private const string MrukPrefabPath = "Packages/com.meta.xr.mrutilitykit/Core/Tools/MRUK.prefab";
+    private const float AccentR = 59f / 255f;
+    private const float AccentG = 142f / 255f;
+    private const float AccentB = 1f;
     private static readonly Vector2 PrimaryButtonSize = new Vector2(310f, 86f);
-    private static readonly Color PanelColor = new Color(0.025f, 0.035f, 0.045f, 0.9f);
-    private static readonly Color PanelAccentColor = new Color(0f, 0.78f, 0.92f, 0.95f);
-    private static readonly Color PanelDividerColor = new Color(1f, 1f, 1f, 0.12f);
-    private static readonly Color StatusBackingColor = new Color(0.08f, 0.12f, 0.145f, 0.72f);
-    private static readonly Color TextPrimaryColor = new Color(0.93f, 0.98f, 1f, 1f);
-    private static readonly Color TextSecondaryColor = new Color(0.66f, 0.76f, 0.8f, 0.88f);
-    private static readonly Color NormalButtonColor = new Color(0.07f, 0.13f, 0.16f, 0.96f);
+    private static readonly Color PanelColor = new Color(0.014f, 0.019f, 0.027f, 0.94f);
+    private static readonly Color HeaderBackingColor = new Color(0.025f, 0.034f, 0.048f, 0.92f);
+    private static readonly Color PanelAccentColor = new Color(AccentR, AccentG, AccentB, 0.95f);
+    private static readonly Color PanelDividerColor = new Color(1f, 1f, 1f, 0.08f);
+    private static readonly Color StatusBackingColor = new Color(0.037f, 0.052f, 0.069f, 0.86f);
+    private static readonly Color TextPrimaryColor = new Color(0.94f, 0.975f, 1f, 1f);
+    private static readonly Color TextSecondaryColor = new Color(0.62f, 0.72f, 0.82f, 0.92f);
+    private static readonly Color NormalButtonColor = new Color(0.045f, 0.078f, 0.13f, 0.98f);
+    private static readonly Color DisabledAccentColor = new Color(1f, 1f, 1f, 0.14f);
 
     [MenuItem("Floor Plan Scanner/Build Complete Scene")]
     public static void BuildCompleteScene()
@@ -34,11 +39,12 @@ public static class FloorPlanSceneSetup
 
         Canvas canvas = FindOrCreateCanvas(cameraRig);
         RectTransform panel = CreateOrResetPanel(canvas.transform);
-        TextMeshProUGUI statusText = CreateText(panel, "StatusText", "Ready to scan", 30f, TextAlignmentOptions.Center, new Vector2(0f, 60f), new Vector2(700f, 112f));
+        TextMeshProUGUI statusText = CreateText(panel, "StatusText", "Ready to scan", 28f, TextAlignmentOptions.Left, new Vector2(28f, 54f), new Vector2(640f, 92f));
         statusText.color = TextPrimaryColor;
         Button scanButton = CreateButton(panel, "ScanButton", "SCAN ROOM", new Vector2(-170f, -140f));
         Button exportButton = CreateButton(panel, "ExportButton", "EXPORT MESH", new Vector2(170f, -140f));
         exportButton.interactable = false;
+        ConfigureButtonAccent(exportButton);
 
         ConfigureEventSystem(cameraRig);
         ConfigureExporter(scanButton, exportButton, statusText);
@@ -222,7 +228,7 @@ public static class FloorPlanSceneSetup
         panelObject.transform.SetParent(canvasTransform, false);
 
         RectTransform panel = panelObject.GetComponent<RectTransform>();
-        ConfigureRect(panel, Vector2.zero, new Vector2(820f, 520f));
+        ConfigureRect(panel, Vector2.zero, new Vector2(840f, 520f));
 
         Image image = panelObject.GetComponent<Image>();
         if (image == null)
@@ -234,12 +240,21 @@ public static class FloorPlanSceneSetup
         ConfigurePanelShadow(panelObject);
         ConfigurePanelDecoration(panel);
 
-        TextMeshProUGUI title = CreateText(panel, "TitleText", "Room Scanner", 46f, TextAlignmentOptions.Top, new Vector2(0f, 208f), new Vector2(760f, 76f));
+        TextMeshProUGUI title = CreateText(panel, "TitleText", "Room Scanner", 40f, TextAlignmentOptions.Left, new Vector2(-146f, 210f), new Vector2(500f, 68f));
         title.color = TextPrimaryColor;
         title.fontStyle = FontStyles.Bold;
 
-        TextMeshProUGUI inputFeedback = CreateText(panel, "InputFeedbackText", "Trigger buttons, A scans, B exports, hold panel to move", 23f, TextAlignmentOptions.Center, new Vector2(0f, -236f), new Vector2(740f, 40f));
+        TextMeshProUGUI subtitle = CreateText(panel, "SubtitleText", "MRUK Export", 22f, TextAlignmentOptions.Right, new Vector2(252f, 210f), new Vector2(240f, 46f));
+        subtitle.color = TextSecondaryColor;
+        subtitle.fontStyle = FontStyles.Normal;
+
+        TextMeshProUGUI statusLabel = CreateText(panel, "StatusLabel", "STATUS", 18f, TextAlignmentOptions.Left, new Vector2(-292f, 116f), new Vector2(140f, 28f));
+        statusLabel.color = PanelAccentColor;
+        statusLabel.fontStyle = FontStyles.Bold;
+
+        TextMeshProUGUI inputFeedback = CreateText(panel, "InputFeedbackText", "Ready", 20f, TextAlignmentOptions.Center, new Vector2(0f, -232f), new Vector2(740f, 38f));
         inputFeedback.color = TextSecondaryColor;
+        inputFeedback.fontStyle = FontStyles.Normal;
         return panel;
     }
 
@@ -257,24 +272,42 @@ public static class FloorPlanSceneSetup
 
     private static void ConfigurePanelDecoration(RectTransform panel)
     {
+        Image headerBacking = FindOrCreateImage(panel, "HeaderBacking");
+        headerBacking.color = HeaderBackingColor;
+        headerBacking.raycastTarget = false;
+        ConfigureRect(headerBacking.rectTransform, new Vector2(0f, 210f), new Vector2(840f, 104f));
+
         Image statusBacking = FindOrCreateImage(panel, "StatusBacking");
         statusBacking.color = StatusBackingColor;
         statusBacking.raycastTarget = false;
-        ConfigureRect(statusBacking.rectTransform, new Vector2(0f, 60f), new Vector2(720f, 126f));
+        ConfigureRect(statusBacking.rectTransform, new Vector2(0f, 48f), new Vector2(720f, 150f));
+
+        Image statusAccent = FindOrCreateImage(panel, "StatusAccent");
+        statusAccent.color = PanelAccentColor;
+        statusAccent.raycastTarget = false;
+        ConfigureRect(statusAccent.rectTransform, new Vector2(-357f, 48f), new Vector2(6f, 150f));
 
         Image accentBar = FindOrCreateImage(panel, "AccentBar");
         accentBar.color = PanelAccentColor;
         accentBar.raycastTarget = false;
-        ConfigureRect(accentBar.rectTransform, new Vector2(0f, 256f), new Vector2(820f, 8f));
+        ConfigureRect(accentBar.rectTransform, new Vector2(0f, 258f), new Vector2(840f, 5f));
 
         Image divider = FindOrCreateImage(panel, "HeaderDivider");
         divider.color = PanelDividerColor;
         divider.raycastTarget = false;
-        ConfigureRect(divider.rectTransform, new Vector2(0f, 162f), new Vector2(740f, 2f));
+        ConfigureRect(divider.rectTransform, new Vector2(0f, 157f), new Vector2(760f, 2f));
 
-        statusBacking.transform.SetAsFirstSibling();
-        accentBar.transform.SetSiblingIndex(1);
-        divider.transform.SetSiblingIndex(2);
+        Image footerDivider = FindOrCreateImage(panel, "FooterDivider");
+        footerDivider.color = PanelDividerColor;
+        footerDivider.raycastTarget = false;
+        ConfigureRect(footerDivider.rectTransform, new Vector2(0f, -204f), new Vector2(760f, 2f));
+
+        headerBacking.transform.SetAsFirstSibling();
+        statusBacking.transform.SetSiblingIndex(1);
+        statusAccent.transform.SetSiblingIndex(2);
+        accentBar.transform.SetSiblingIndex(3);
+        divider.transform.SetSiblingIndex(4);
+        footerDivider.transform.SetSiblingIndex(5);
     }
 
     private static Image FindOrCreateImage(Transform parent, string name)
@@ -322,16 +355,28 @@ public static class FloorPlanSceneSetup
         button.targetGraphic = image;
         button.transition = Selectable.Transition.None;
         ConfigureButtonShadow(buttonObject);
+        ConfigureButtonAccent(button);
 
-        TextMeshProUGUI buttonText = CreateText(buttonObject.transform, "Text", label, 32f, TextAlignmentOptions.Center, Vector2.zero, Vector2.zero);
+        TextMeshProUGUI buttonText = CreateText(buttonObject.transform, "Text", label, 30f, TextAlignmentOptions.Center, Vector2.zero, Vector2.zero);
         buttonText.color = TextPrimaryColor;
         buttonText.fontStyle = FontStyles.Bold;
+        buttonText.characterSpacing = 0f;
         buttonText.rectTransform.anchorMin = Vector2.zero;
         buttonText.rectTransform.anchorMax = Vector2.one;
         buttonText.rectTransform.offsetMin = Vector2.zero;
         buttonText.rectTransform.offsetMax = Vector2.zero;
+        buttonText.transform.SetAsLastSibling();
 
         return button;
+    }
+
+    private static void ConfigureButtonAccent(Button button)
+    {
+        Image accent = FindOrCreateImage(button.transform, "ButtonAccent");
+        accent.color = button.interactable ? PanelAccentColor : DisabledAccentColor;
+        accent.raycastTarget = false;
+        ConfigureRect(accent.rectTransform, new Vector2(0f, -39.5f), new Vector2(PrimaryButtonSize.x, 5f));
+        accent.transform.SetAsFirstSibling();
     }
 
     private static void ConfigureButtonShadow(GameObject buttonObject)
@@ -351,7 +396,7 @@ public static class FloorPlanSceneSetup
             outline = buttonObject.AddComponent<Outline>();
         }
 
-        outline.effectColor = new Color(0.2f, 0.85f, 1f, 0.35f);
+        outline.effectColor = new Color(AccentR, AccentG, AccentB, 0.35f);
         outline.effectDistance = new Vector2(1.5f, -1.5f);
     }
 
