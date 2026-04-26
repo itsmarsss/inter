@@ -492,16 +492,25 @@ export function SceneView(props: SceneViewProps) {
     props.onSelect({ type: "furniture", id: instance.id });
   }
 
+  // Global dragend safety net: if the drag ends anywhere (e.g. released outside
+  // the viewport or dropped on another element), clear the ghost so it never
+  // stays stuck and blocks subsequent pointer events / raycasts.
+  useEffect(() => {
+    function clearGhost() {
+      dragEnterCountRef.current = 0;
+      setDragGhost(null);
+    }
+    document.addEventListener("dragend", clearGhost);
+    return () => document.removeEventListener("dragend", clearGhost);
+  }, []);
+
   return (
     <div
       className="relative h-full min-h-0 bg-[var(--color-background)]"
-      title="Viewport navigation: two-finger swipe, middle mouse, or Alt-drag orbits; right mouse pans."
-      onDragEnter={() => {
-        dragEnterCountRef.current += 1;
-        if (dragEnterCountRef.current === 1) {
-          const assetId = getDragAssetId();
-          if (assetId) setDragGhost({ assetId, position: null });
-        }
+      onDragEnter={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+        const assetId = getDragAssetId();
+        if (assetId) setDragGhost({ assetId, position: null });
       }}
       onDragOver={(event) => {
         event.preventDefault();
@@ -512,12 +521,10 @@ export function SceneView(props: SceneViewProps) {
           setDragGhost((prev) => (prev ? { ...prev, position: clamped } : null));
         }
       }}
-      onDragLeave={() => {
-        dragEnterCountRef.current -= 1;
-        if (dragEnterCountRef.current <= 0) {
-          dragEnterCountRef.current = 0;
-          setDragGhost(null);
-        }
+      onDragLeave={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+        dragEnterCountRef.current = 0;
+        setDragGhost(null);
       }}
       onDrop={(event) => {
         dragEnterCountRef.current = 0;
