@@ -1,1 +1,17 @@
-[]
+[
+  {
+    "id": "14b2f505-fc98-46a2-ae9c-4123a7c2e4eb",
+    "name": "Table",
+    "prompt": "table",
+    "primitive": "table",
+    "localModelPath": "/meshes/14b2f505-fc98-46a2-ae9c-4123a7c2e4eb.glb",
+    "localThumbPath": "/meshes/14b2f505-fc98-46a2-ae9c-4123a7c2e4eb.png",
+    "realLengthMeters": 2,
+    "footprint": {
+      "width": 2,
+      "depth": 1.6133256467207326,
+      "height": 0.858603030348845
+    },
+    "savedAt": 1777184661474
+  }
+]

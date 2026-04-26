@@ -1,6 +1,6 @@
 "use client";
 
-import { BookmarkMinus, FolderOpen } from "lucide-react";
+import { Trash2, FolderOpen } from "lucide-react";
 import { useState } from "react";
 import type { LibraryEntry } from "../../state/types";
 import { FurnitureSilhouette } from "./AssetCard";
@@ -19,28 +19,43 @@ export function LibraryCard({ entry, onLoad, onDelete }: LibraryCardProps) {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        padding: "10px 12px",
+        position: "relative",
         display: "flex",
+        alignItems: "center",
         gap: 10,
-        alignItems: "flex-start",
+        padding: "9px 12px 9px 14px",
         borderBottom: "1px solid var(--border-dim)",
-        background: hovered ? "var(--surface-overlay)" : "transparent",
-        transition: "background 100ms ease",
+        background: hovered ? "rgba(255,255,255,0.018)" : "transparent",
+        transition: "background 120ms ease",
       }}
     >
+      {/* Amber left accent bar — distinguishes library from session */}
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 0,
+          bottom: 0,
+          width: 2,
+          background: "var(--status-generating)",
+          opacity: 0.5,
+        }}
+      />
+
       {/* Thumbnail */}
       <div
         style={{
-          width: 44,
-          height: 44,
+          width: 38,
+          height: 38,
           flexShrink: 0,
-          borderRadius: 5,
+          borderRadius: 3,
           background: "var(--surface-input)",
-          border: "1px solid var(--border-dim)",
+          border: `1px solid ${hovered ? "var(--border-mid)" : "var(--border-dim)"}`,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           overflow: "hidden",
+          transition: "border-color 120ms",
         }}
       >
         {entry.localThumbPath ? (
@@ -55,45 +70,57 @@ export function LibraryCard({ entry, onLoad, onDelete }: LibraryCardProps) {
       </div>
 
       {/* Text */}
-      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
-        <span
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
           style={{
-            fontSize: 13,
+            fontSize: 11,
             fontWeight: 500,
-            color: "var(--text-bright)",
+            color: hovered ? "var(--text-bright)" : "var(--text-primary)",
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
             fontFamily: "var(--font-ui)",
             letterSpacing: "-0.005em",
+            transition: "color 120ms",
           }}
         >
           {entry.name}
-        </span>
-        <span
+        </div>
+        <div
           style={{
-            fontSize: 11,
+            fontSize: 10,
             color: "var(--text-secondary)",
             fontFamily: "var(--font-ui)",
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
+            fontStyle: "italic",
+            marginTop: 2,
           }}
         >
           {entry.prompt}
-        </span>
+        </div>
       </div>
 
-      {/* Actions */}
-      <div style={{ display: "flex", gap: 2, flexShrink: 0, marginTop: 1 }}>
-        <LibraryActionBtn
+      {/* Actions — slide in on hover */}
+      <div
+        style={{
+          display: "flex",
+          gap: 2,
+          flexShrink: 0,
+          opacity: hovered ? 1 : 0,
+          transform: hovered ? "translateX(0)" : "translateX(6px)",
+          transition: "opacity 150ms ease, transform 150ms ease",
+        }}
+      >
+        <ActionBtn
           label="Load into session"
           icon={<FolderOpen size={11} strokeWidth={1.5} />}
           onClick={onLoad}
         />
-        <LibraryActionBtn
+        <ActionBtn
           label="Delete from library"
-          icon={<BookmarkMinus size={11} strokeWidth={1.5} />}
+          icon={<Trash2 size={11} strokeWidth={1.5} />}
           onClick={onDelete}
           danger
         />
@@ -102,7 +129,7 @@ export function LibraryCard({ entry, onLoad, onDelete }: LibraryCardProps) {
   );
 }
 
-function LibraryActionBtn({
+function ActionBtn({
   label,
   icon,
   onClick,
@@ -122,11 +149,11 @@ function LibraryActionBtn({
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        width: 22,
-        height: 22,
-        borderRadius: 4,
-        border: "none",
-        background: hovered ? "var(--surface-overlay)" : "transparent",
+        width: 24,
+        height: 24,
+        borderRadius: 3,
+        border: `1px solid ${hovered ? (danger ? "var(--status-error-border)" : "var(--border-mid)") : "var(--border-dim)"}`,
+        background: hovered ? (danger ? "var(--status-error-bg)" : "var(--surface-input)") : "transparent",
         color: hovered
           ? danger ? "var(--status-error)" : "var(--text-primary)"
           : "var(--text-secondary)",
@@ -134,7 +161,7 @@ function LibraryActionBtn({
         alignItems: "center",
         justifyContent: "center",
         cursor: "pointer",
-        transition: "background 100ms, color 100ms",
+        transition: "all 120ms",
       }}
     >
       {icon}
