@@ -26,20 +26,23 @@ public class RoomMeshExporterUI : MonoBehaviour
     private const float PanelWorldScale = 0.00125f;
     private const float PreviewRotateDegreesPerSecond = 90f;
     private const float ThumbstickDeadZone = 0.12f;
+    private const float AccentR = 59f / 255f;
+    private const float AccentG = 142f / 255f;
+    private const float AccentB = 1f;
     private static readonly Vector2 PrimaryButtonSize = new Vector2(310f, 86f);
     private static readonly Color PanelColor = new Color(0.025f, 0.035f, 0.045f, 0.9f);
-    private static readonly Color PanelAccentColor = new Color(59f / 255f, 142f / 255f, 1f, 0.95f);
+    private static readonly Color PanelAccentColor = new Color(AccentR, AccentG, AccentB, 0.95f);
     private static readonly Color PanelDividerColor = new Color(1f, 1f, 1f, 0.12f);
     private static readonly Color StatusBackingColor = new Color(0.08f, 0.12f, 0.145f, 0.72f);
     private static readonly Color TextPrimaryColor = new Color(0.93f, 0.98f, 1f, 1f);
     private static readonly Color TextSecondaryColor = new Color(0.66f, 0.76f, 0.8f, 0.88f);
-    private static readonly Color NormalButtonColor = new Color(0.07f, 0.13f, 0.16f, 0.96f);
-    private static readonly Color HoverButtonColor = new Color(0.02f, 0.48f, 0.6f, 1f);
-    private static readonly Color PressedButtonColor = new Color(0.12f, 0.72f, 0.42f, 1f);
+    private static readonly Color NormalButtonColor = new Color(AccentR, AccentG, AccentB, 0.88f);
+    private static readonly Color HoverButtonColor = new Color(0.31f, 0.62f, 1f, 1f);
+    private static readonly Color PressedButtonColor = new Color(0.15f, 0.36f, 0.76f, 1f);
     private static readonly Color BlockedButtonColor = new Color(0.76f, 0.18f, 0.15f, 1f);
     private static readonly Color DisabledButtonColor = new Color(0.11f, 0.13f, 0.15f, 0.78f);
-    private static readonly Color PointerColor = new Color(0.2f, 0.95f, 1f, 1f);
-    private static readonly Color PreviewColor = new Color(0.18f, 0.9f, 1f, 0.38f);
+    private static readonly Color PointerColor = new Color(AccentR, AccentG, AccentB, 1f);
+    private static readonly Color PreviewColor = new Color(AccentR, AccentG, AccentB, 0.38f);
 
     private bool isScanning;
     private bool hasCompletedScan;
@@ -941,7 +944,7 @@ public class RoomMeshExporterUI : MonoBehaviour
             outline = buttonObject.AddComponent<Outline>();
         }
 
-        outline.effectColor = new Color(0.2f, 0.85f, 1f, 0.35f);
+        outline.effectColor = new Color(AccentR, AccentG, AccentB, 0.35f);
         outline.effectDistance = new Vector2(1.5f, -1.5f);
     }
 
