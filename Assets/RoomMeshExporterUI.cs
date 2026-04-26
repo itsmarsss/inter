@@ -28,7 +28,7 @@ public class RoomMeshExporterUI : MonoBehaviour
     private const float ThumbstickDeadZone = 0.12f;
     private static readonly Vector2 PrimaryButtonSize = new Vector2(310f, 86f);
     private static readonly Color PanelColor = new Color(0.025f, 0.035f, 0.045f, 0.9f);
-    private static readonly Color PanelAccentColor = new Color(0f, 0.78f, 0.92f, 0.95f);
+    private static readonly Color PanelAccentColor = new Color(59f / 255f, 142f / 255f, 1f, 0.95f);
     private static readonly Color PanelDividerColor = new Color(1f, 1f, 1f, 0.12f);
     private static readonly Color StatusBackingColor = new Color(0.08f, 0.12f, 0.145f, 0.72f);
     private static readonly Color TextPrimaryColor = new Color(0.93f, 0.98f, 1f, 1f);
