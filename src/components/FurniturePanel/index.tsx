@@ -15,7 +15,6 @@ type FurniturePanelProps = {
   onUploadModel?: (file: File) => void;
   onSaveAsset: (asset: FurnitureAsset) => void;
   onDeleteLibraryEntry: (id: string) => void;
-  onLoadLibraryEntry: (entry: LibraryEntry) => void;
   onClose: () => void;
 };
 
@@ -28,7 +27,6 @@ export function FurniturePanel({
   onUploadModel,
   onSaveAsset,
   onDeleteLibraryEntry,
-  onLoadLibraryEntry,
   onClose,
 }: FurniturePanelProps) {
   const [inputValue, setInputValue] = useState("");
@@ -245,7 +243,6 @@ export function FurniturePanel({
           label="Workspace"
           count={assets.length}
         />
-
         {assets.length === 0 ? (
           <EmptyState />
         ) : (
@@ -277,7 +274,6 @@ export function FurniturePanel({
             <LibraryCard
               key={entry.id}
               entry={entry}
-              onLoad={() => onLoadLibraryEntry(entry)}
               onDelete={() => onDeleteLibraryEntry(entry.id)}
             />
           ))

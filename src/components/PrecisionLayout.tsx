@@ -6,6 +6,7 @@ import type {
   Door,
   FurnitureAsset,
   FurnitureAssetMap,
+  FurnitureInstance,
   LibraryEntry,
   MarbleResult,
   RoomBounds,
@@ -33,6 +34,7 @@ type PrecisionLayoutProps = {
   blueprintPreview: ReactNode;
 
   furnitureAssets: FurnitureAsset[];
+  furnitureInstances: FurnitureInstance[];
   customShapes: CustomShape[];
   cameras: SceneCamera[];
   doors: Door[];
@@ -56,6 +58,7 @@ type PrecisionLayoutProps = {
   onAddWindow: () => void;
   onRemoveDoor: (id: string) => void;
   onRemoveWindow: (id: string) => void;
+  onRemoveFurnitureInstance: (id: string) => void;
   onRemoveWallSegment: (wall: WallId, id: string) => void;
   onResetWallSegments: () => void;
 
@@ -64,7 +67,6 @@ type PrecisionLayoutProps = {
   savingAssetId: string | null;
   onSaveAsset: (asset: FurnitureAsset) => void;
   onDeleteLibraryEntry: (id: string) => void;
-  onLoadLibraryEntry: (entry: LibraryEntry) => void;
   upload: UploadStatus;
   stylePrompt: string;
   onStylePromptChange: (prompt: string) => void;
@@ -80,6 +82,7 @@ export function PrecisionLayout({
   blueprint,
   blueprintPreview,
   furnitureAssets,
+  furnitureInstances,
   customShapes,
   cameras,
   doors,
@@ -99,6 +102,7 @@ export function PrecisionLayout({
   onAddWindow,
   onRemoveDoor,
   onRemoveWindow,
+  onRemoveFurnitureInstance,
   onRemoveWallSegment,
   onResetWallSegments,
   onGenerateFurniture,
@@ -106,7 +110,6 @@ export function PrecisionLayout({
   savingAssetId,
   onSaveAsset,
   onDeleteLibraryEntry,
-  onLoadLibraryEntry,
   upload,
   stylePrompt,
   onStylePromptChange,
@@ -190,6 +193,7 @@ export function PrecisionLayout({
             onToolChange={onToolChange}
             selected={selected}
             onSelect={onSelect}
+            furnitureInstances={furnitureInstances}
             doors={doors}
             windows={windows}
             wallSegments={wallSegments}
@@ -201,6 +205,7 @@ export function PrecisionLayout({
             onAddWindow={onAddWindow}
             onRemoveDoor={onRemoveDoor}
             onRemoveWindow={onRemoveWindow}
+            onRemoveFurnitureInstance={onRemoveFurnitureInstance}
             onRemoveWallSegment={onRemoveWallSegment}
             onResetWallSegments={onResetWallSegments}
             onClose={() => setPanelOpen(false)}
@@ -219,7 +224,6 @@ export function PrecisionLayout({
             onUploadModel={onUploadModel}
             onSaveAsset={onSaveAsset}
             onDeleteLibraryEntry={onDeleteLibraryEntry}
-            onLoadLibraryEntry={onLoadLibraryEntry}
             onClose={() => setPanelOpen(false)}
           />
         </div>

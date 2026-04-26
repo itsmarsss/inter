@@ -1,21 +1,25 @@
 "use client";
 
-import { Trash2, FolderOpen } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import { useState } from "react";
 import type { LibraryEntry } from "../../state/types";
 import { FurnitureSilhouette } from "./AssetCard";
 
 type LibraryCardProps = {
   entry: LibraryEntry;
-  onLoad: () => void;
   onDelete: () => void;
 };
 
-export function LibraryCard({ entry, onLoad, onDelete }: LibraryCardProps) {
+export function LibraryCard({ entry, onDelete }: LibraryCardProps) {
   const [hovered, setHovered] = useState(false);
 
   return (
     <div
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData("application/x-furniture-asset", entry.id);
+        e.dataTransfer.effectAllowed = "copy";
+      }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
@@ -27,6 +31,8 @@ export function LibraryCard({ entry, onLoad, onDelete }: LibraryCardProps) {
         borderBottom: "1px solid var(--border-dim)",
         background: hovered ? "rgba(255,255,255,0.018)" : "transparent",
         transition: "background 120ms ease",
+        cursor: "grab",
+        userSelect: "none",
       }}
     >
       {/* Amber left accent bar — distinguishes library from session */}
@@ -102,49 +108,27 @@ export function LibraryCard({ entry, onLoad, onDelete }: LibraryCardProps) {
         </div>
       </div>
 
-      {/* Actions — slide in on hover */}
+      {/* Delete button — slides in on hover */}
       <div
         style={{
-          display: "flex",
-          gap: 2,
           flexShrink: 0,
           opacity: hovered ? 1 : 0,
           transform: hovered ? "translateX(0)" : "translateX(6px)",
           transition: "opacity 150ms ease, transform 150ms ease",
         }}
       >
-        <ActionBtn
-          label="Load into session"
-          icon={<FolderOpen size={11} strokeWidth={1.5} />}
-          onClick={onLoad}
-        />
-        <ActionBtn
-          label="Delete from library"
-          icon={<Trash2 size={11} strokeWidth={1.5} />}
-          onClick={onDelete}
-          danger
-        />
+        <DeleteBtn onClick={onDelete} />
       </div>
     </div>
   );
 }
 
-function ActionBtn({
-  label,
-  icon,
-  onClick,
-  danger,
-}: {
-  label: string;
-  icon: React.ReactNode;
-  onClick: () => void;
-  danger?: boolean;
-}) {
+function DeleteBtn({ onClick }: { onClick: () => void }) {
   const [hovered, setHovered] = useState(false);
   return (
     <button
       type="button"
-      aria-label={label}
+      aria-label="Delete from library"
       onClick={(e) => { e.stopPropagation(); onClick(); }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -152,11 +136,9 @@ function ActionBtn({
         width: 24,
         height: 24,
         borderRadius: 3,
-        border: `1px solid ${hovered ? (danger ? "var(--status-error-border)" : "var(--border-mid)") : "var(--border-dim)"}`,
-        background: hovered ? (danger ? "var(--status-error-bg)" : "var(--surface-input)") : "transparent",
-        color: hovered
-          ? danger ? "var(--status-error)" : "var(--text-primary)"
-          : "var(--text-secondary)",
+        border: `1px solid ${hovered ? "var(--status-error-border)" : "var(--border-dim)"}`,
+        background: hovered ? "var(--status-error-bg)" : "transparent",
+        color: hovered ? "var(--status-error)" : "var(--text-secondary)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -164,7 +146,7 @@ function ActionBtn({
         transition: "all 120ms",
       }}
     >
-      {icon}
+      <Trash2 size={11} strokeWidth={1.5} />
     </button>
   );
 }

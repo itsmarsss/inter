@@ -40,10 +40,37 @@ export default function App({ entering = false }: { entering?: boolean }) {
   const blueprintCaptureRef = useRef<() => string | undefined>(() => undefined);
   const generationRunRef = useRef(0);
   const furnitureStreamsRef = useRef<Map<string, EventSource>>(new Map());
-  const assetById = useMemo(() => buildFurnitureAssetMap(state.furnitureAssets), [state.furnitureAssets]);
+  const assetById = useMemo(() => {
+    const map = buildFurnitureAssetMap(state.furnitureAssets);
+    for (const entry of libraryEntries) {
+      if (!map.has(entry.id)) {
+        map.set(entry.id, libraryEntryToAsset(entry));
+      }
+    }
+    return map;
+  }, [state.furnitureAssets, libraryEntries]);
 
   useEffect(() => {
     fetchLibrary().then(setLibraryEntries);
+  }, []);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Delete" && event.key !== "Backspace") return;
+      const target = event.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
+      setState((current) => {
+        if (current.selected?.type !== "furniture") return current;
+        const id = current.selected.id;
+        return {
+          ...current,
+          furnitureInstances: current.furnitureInstances.filter((i) => i.id !== id),
+          selected: null,
+        };
+      });
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
   const registerSceneCapture = useCallback((capture: () => CaptureImage | undefined) => {
@@ -274,6 +301,17 @@ export default function App({ entering = false }: { entering?: boolean }) {
     }));
   }
 
+  function handleRemoveFurnitureInstance(id: string) {
+    setState((current) => ({
+      ...current,
+      furnitureInstances: current.furnitureInstances.filter((i) => i.id !== id),
+      selected:
+        current.selected?.type === "furniture" && current.selected.id === id
+          ? null
+          : current.selected,
+    }));
+  }
+
   async function handleSaveAsset(asset: FurnitureAsset) {
     if (!asset.modelUrl || savingAssetId) return;
     setSavingAssetId(asset.id);
@@ -281,19 +319,22 @@ export default function App({ entering = false }: { entering?: boolean }) {
     setSavingAssetId(null);
     if (entry) {
       setLibraryEntries((current) => [entry, ...current.filter((e) => e.id !== entry.id)]);
+      // The saved entry's id equals the original asset id, so the existing
+      // furnitureAsset record already covers it — no duplicate needed.
     }
   }
 
   async function handleDeleteLibraryEntry(id: string) {
     await deleteAssetFromLibrary(id);
     setLibraryEntries((current) => current.filter((e) => e.id !== id));
-  }
-
-  function handleLoadLibraryEntry(entry: LibraryEntry) {
-    const asset = libraryEntryToAsset(entry);
     setState((current) => ({
       ...current,
-      furnitureAssets: [asset, ...current.furnitureAssets],
+      furnitureInstances: current.furnitureInstances.filter((i) => i.assetId !== id),
+      selected:
+        current.selected?.type === "furniture" &&
+        current.furnitureInstances.find((i) => i.id === current.selected?.id)?.assetId === id
+          ? null
+          : current.selected,
     }));
   }
 
@@ -477,6 +518,7 @@ export default function App({ entering = false }: { entering?: boolean }) {
         />
       }
       furnitureAssets={state.furnitureAssets}
+      furnitureInstances={state.furnitureInstances}
       customShapes={state.customShapes}
       cameras={state.cameras}
       doors={state.doors}
@@ -499,6 +541,7 @@ export default function App({ entering = false }: { entering?: boolean }) {
       onAddWindow={handleAddWindow}
       onRemoveDoor={handleRemoveDoor}
       onRemoveWindow={handleRemoveWindow}
+      onRemoveFurnitureInstance={handleRemoveFurnitureInstance}
       onRemoveWallSegment={handleRemoveWallSegment}
       onResetWallSegments={handleResetWallSegments}
       onGenerateFurniture={handleGenerateFurniture}
@@ -506,7 +549,6 @@ export default function App({ entering = false }: { entering?: boolean }) {
       savingAssetId={savingAssetId}
       onSaveAsset={handleSaveAsset}
       onDeleteLibraryEntry={handleDeleteLibraryEntry}
-      onLoadLibraryEntry={handleLoadLibraryEntry}
       upload={state.upload}
       stylePrompt={state.stylePrompt}
       onStylePromptChange={(stylePrompt) => setState((current) => ({ ...current, stylePrompt }))}

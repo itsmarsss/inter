@@ -22,6 +22,7 @@ import { type ComponentType, type ReactNode, useState } from "react";
 import type {
   CustomShape,
   Door,
+  FurnitureInstance,
   SceneCamera,
   SelectedRef,
   ShapeKind,
@@ -37,6 +38,7 @@ type ObjectsPanelProps = {
   onToolChange: (tool: ToolMode) => void;
   selected: SelectedRef;
   onSelect: (selected: SelectedRef) => void;
+  furnitureInstances: FurnitureInstance[];
   doors: Door[];
   windows: WindowOpening[];
   wallSegments: WallSegmentation;
@@ -48,6 +50,7 @@ type ObjectsPanelProps = {
   onAddWindow: () => void;
   onRemoveDoor: (id: string) => void;
   onRemoveWindow: (id: string) => void;
+  onRemoveFurnitureInstance: (id: string) => void;
   onRemoveWallSegment: (wall: WallId, id: string) => void;
   onResetWallSegments: () => void;
   onClose: () => void;
@@ -93,6 +96,7 @@ export function ObjectsPanel({
   onToolChange,
   selected,
   onSelect,
+  furnitureInstances,
   doors,
   windows,
   wallSegments,
@@ -104,6 +108,7 @@ export function ObjectsPanel({
   onAddWindow,
   onRemoveDoor,
   onRemoveWindow,
+  onRemoveFurnitureInstance,
   onRemoveWallSegment,
   onResetWallSegments,
   onClose,
@@ -151,6 +156,24 @@ export function ObjectsPanel({
             <ShapePicker activeKind={activeShapeKind} onChange={onActiveShapeKindChange} />
           ) : null}
         </ToolSection>
+
+        {furnitureInstances.length > 0 ? (
+          <>
+            <Divider />
+            <ListSection label="Placed Furniture" count={furnitureInstances.length}>
+              {furnitureInstances.map((instance) => (
+                <ItemRow
+                  key={instance.id}
+                  icon={Box}
+                  label={instance.name}
+                  selected={selected?.type === "furniture" && selected.id === instance.id}
+                  onSelect={() => onSelect({ type: "furniture", id: instance.id })}
+                  onRemove={() => onRemoveFurnitureInstance(instance.id)}
+                />
+              ))}
+            </ListSection>
+          </>
+        ) : null}
 
         <Divider />
 

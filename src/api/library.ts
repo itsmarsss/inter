@@ -44,8 +44,10 @@ export async function deleteAssetFromLibrary(id: string): Promise<boolean> {
 }
 
 export function libraryEntryToAsset(entry: LibraryEntry): FurnitureAsset {
+  // Use the entry's own id so the asset is stable across sessions and
+  // SceneView's assetById map can look it up immediately on drag-drop.
   return {
-    id: `lib-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+    id: entry.id,
     name: entry.name,
     prompt: entry.prompt,
     primitive: entry.primitive,
