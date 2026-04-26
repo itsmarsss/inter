@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -20,6 +21,11 @@ public class RoomMeshExporterUI : MonoBehaviour
     public TextMeshProUGUI statusText;
 
     private const float PressFeedbackSeconds = 0.35f;
+    private const float PanelDistanceMeters = 1.85f;
+    private const float PanelVerticalOffsetFromEye = -0.05f;
+    private const float PanelWorldScale = 0.00125f;
+    private const float PreviewRotateDegreesPerSecond = 90f;
+    private const float ThumbstickDeadZone = 0.12f;
     private static readonly Vector2 PrimaryButtonSize = new Vector2(310f, 86f);
     private static readonly Color PanelColor = new Color(0.025f, 0.035f, 0.045f, 0.9f);
     private static readonly Color PanelAccentColor = new Color(0f, 0.78f, 0.92f, 0.95f);
@@ -33,7 +39,7 @@ public class RoomMeshExporterUI : MonoBehaviour
     private static readonly Color BlockedButtonColor = new Color(0.76f, 0.18f, 0.15f, 1f);
     private static readonly Color DisabledButtonColor = new Color(0.11f, 0.13f, 0.15f, 0.78f);
     private static readonly Color PointerColor = new Color(0.2f, 0.95f, 1f, 1f);
-    private static readonly Color PreviewColor = new Color(0.18f, 0.9f, 1f, 0.82f);
+    private static readonly Color PreviewColor = new Color(0.18f, 0.9f, 1f, 0.38f);
 
     private bool isScanning;
     private bool hasCompletedScan;
@@ -49,11 +55,14 @@ public class RoomMeshExporterUI : MonoBehaviour
     private GameObject objPreviewObject;
     private Material objPreviewMaterial;
     private TextMeshProUGUI inputFeedbackText;
+    private Canvas uiCanvas;
+    private Coroutine panelPlacementCoroutine;
     private int lastExportFrame = -1;
     private float scanPressedUntil;
     private float exportPressedUntil;
     private float exportBlockedUntil;
     private bool isDraggingPanel;
+    private bool panelWasUserMoved;
     private Transform panelDragTransform;
     private float panelDragDistance;
     private Vector3 panelDragLocalOffset;
@@ -89,6 +98,7 @@ public class RoomMeshExporterUI : MonoBehaviour
         }
 
         UpdateStatus("Press SCAN ROOM to begin");
+        QueuePanelPlacement(true);
     }
 
     private void ConfigureSceneObjects()
@@ -125,15 +135,14 @@ public class RoomMeshExporterUI : MonoBehaviour
             return;
         }
 
+        uiCanvas = canvas;
         canvas.renderMode = RenderMode.WorldSpace;
         if (cameraRig != null && cameraRig.centerEyeAnchor != null)
         {
             canvas.worldCamera = cameraRig.centerEyeAnchor.GetComponent<Camera>();
-            Transform centerEye = cameraRig.centerEyeAnchor;
-            canvas.transform.position = centerEye.position + centerEye.forward * 2f + Vector3.up * 0.55f;
-            canvas.transform.rotation = Quaternion.LookRotation(canvas.transform.position - centerEye.position, Vector3.up);
         }
-        canvas.transform.localScale = Vector3.one * 0.00125f;
+        canvas.transform.localScale = Vector3.one * PanelWorldScale;
+        PlacePanelInFrontOfUser(true);
 
         CanvasScaler canvasScaler = canvas.GetComponent<CanvasScaler>();
         if (canvasScaler == null)
@@ -221,6 +230,7 @@ public class RoomMeshExporterUI : MonoBehaviour
         {
             return;
         }
+        uiCanvas = canvas;
 
         RectTransform panel = FindOrCreatePanel(canvas.transform);
         panelRect = panel;
@@ -355,6 +365,7 @@ public class RoomMeshExporterUI : MonoBehaviour
     {
         HandleControllerShortcuts();
         HandleDirectControllerRay();
+        HandlePreviewControls();
     }
 
     private void HandleControllerShortcuts()
@@ -489,6 +500,7 @@ public class RoomMeshExporterUI : MonoBehaviour
         panelDragTransform = null;
         if (showFeedback)
         {
+            panelWasUserMoved = true;
             ShowInputFeedback("Panel moved");
         }
     }
@@ -504,10 +516,82 @@ public class RoomMeshExporterUI : MonoBehaviour
         return canvas != null ? canvas.transform : panelRect;
     }
 
-    private static void FacePanelTowardUser(Transform panelTransform)
+    private void QueuePanelPlacement(bool force)
+    {
+        if (panelPlacementCoroutine != null)
+        {
+            StopCoroutine(panelPlacementCoroutine);
+        }
+
+        panelPlacementCoroutine = StartCoroutine(PlacePanelInFrontOfUserOverTime(force));
+    }
+
+    private IEnumerator PlacePanelInFrontOfUserOverTime(bool force)
+    {
+        for (int i = 0; i < 12; i++)
+        {
+            PlacePanelInFrontOfUser(force);
+            yield return null;
+        }
+
+        yield return new WaitForSeconds(0.25f);
+        PlacePanelInFrontOfUser(force);
+        panelPlacementCoroutine = null;
+    }
+
+    private bool PlacePanelInFrontOfUser(bool force)
+    {
+        if (!force && panelWasUserMoved)
+        {
+            return false;
+        }
+
+        Canvas canvas = uiCanvas != null ? uiCanvas : GetOrCreateUiCanvas();
+        Transform centerEye = GetCenterEyeTransform();
+        if (canvas == null || centerEye == null)
+        {
+            return false;
+        }
+
+        uiCanvas = canvas;
+        Vector3 flatForward = GetFlatForward(centerEye);
+        Vector3 panelPosition = centerEye.position + flatForward * PanelDistanceMeters;
+        panelPosition.y = centerEye.position.y + PanelVerticalOffsetFromEye;
+
+        canvas.transform.SetPositionAndRotation(panelPosition, Quaternion.LookRotation(flatForward, Vector3.up));
+        canvas.transform.localScale = Vector3.one * PanelWorldScale;
+        return true;
+    }
+
+    private static Transform GetCenterEyeTransform()
     {
         OVRCameraRig cameraRig = FindAnyObjectByType<OVRCameraRig>();
-        Transform centerEye = cameraRig != null ? cameraRig.centerEyeAnchor : null;
+        if (cameraRig != null && cameraRig.centerEyeAnchor != null)
+        {
+            return cameraRig.centerEyeAnchor;
+        }
+
+        return Camera.main != null ? Camera.main.transform : null;
+    }
+
+    private static Vector3 GetFlatForward(Transform source)
+    {
+        Vector3 flatForward = Vector3.ProjectOnPlane(source.forward, Vector3.up);
+        if (flatForward.sqrMagnitude < 0.001f)
+        {
+            flatForward = source.forward;
+        }
+        if (flatForward.sqrMagnitude < 0.001f)
+        {
+            flatForward = Vector3.forward;
+        }
+
+        return flatForward.normalized;
+    }
+
+    private static void FacePanelTowardUser(Transform panelTransform)
+    {
+        Transform centerEye = GetCenterEyeTransform();
         if (centerEye == null)
         {
             return;
@@ -945,6 +1029,8 @@ public class RoomMeshExporterUI : MonoBehaviour
             Debug.Log("Room scan cancelled.");
         }
 
+        QueuePanelPlacement(true);
+
         if (scanButton != null)
         {
             scanButton.interactable = true;
@@ -1021,8 +1107,14 @@ public class RoomMeshExporterUI : MonoBehaviour
 
     private static MRUKRoom SelectRoomForLatestScanExport(MRUK mruk, List<MRUKRoom> touchedRooms)
     {
+        MRUKRoom roomContainingUser = SelectRoomContainingUser(mruk);
+        if (IsExportableRoom(roomContainingUser))
+        {
+            return roomContainingUser;
+        }
+
         MRUKRoom currentRoom = mruk.GetCurrentRoom();
-        if (IsExportableRoom(currentRoom) && touchedRooms.Contains(currentRoom))
+        if (IsExportableRoom(currentRoom))
         {
             return currentRoom;
         }
@@ -1033,11 +1125,6 @@ public class RoomMeshExporterUI : MonoBehaviour
             {
                 return touchedRooms[i];
             }
-        }
-
-        if (IsExportableRoom(currentRoom))
-        {
-            return currentRoom;
         }
 
         MRUKRoom largestRoom = null;
@@ -1053,6 +1140,38 @@ public class RoomMeshExporterUI : MonoBehaviour
         }
 
         return IsExportableRoom(largestRoom) ? largestRoom : null;
+    }
+
+    private static MRUKRoom SelectRoomContainingUser(MRUK mruk)
+    {
+        Transform centerEye = GetCenterEyeTransform();
+        if (mruk == null || centerEye == null)
+        {
+            return null;
+        }
+
+        Vector3 headPosition = centerEye.position;
+        foreach (MRUKRoom room in mruk.Rooms)
+        {
+            if (!IsExportableRoom(room))
+            {
+                continue;
+            }
+
+            try
+            {
+                if (room.IsPositionInRoom(headPosition, false))
+                {
+                    return room;
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"Could not test room containment for {GetRoomId(room)}: {e.Message}");
+            }
+        }
+
+        return null;
     }
 
     private static bool IsExportableRoom(MRUKRoom room)
@@ -1123,62 +1242,31 @@ public class RoomMeshExporterUI : MonoBehaviour
         Debug.Log($"Exporting room {GetRoomId(room)} with {room.Anchors.Count} anchors. MRUK rooms loaded: {(MRUK.Instance != null ? MRUK.Instance.Rooms.Count : 0)}.");
 
         bool foundMesh = false;
-        bool wroteRoomScanAlias = false;
-
-        MRUKAnchor globalMeshAnchor = room.GlobalMeshAnchor;
-        if (globalMeshAnchor != null)
-        {
-            Debug.Log("Found global mesh anchor.");
-
-            Mesh mesh = globalMeshAnchor.GlobalMesh;
-            if (mesh == null || mesh.vertexCount == 0)
-            {
-                MeshFilter meshFilter = globalMeshAnchor.GetComponent<MeshFilter>();
-                if (meshFilter == null)
-                {
-                    meshFilter = globalMeshAnchor.GetComponentInChildren<MeshFilter>();
-                }
-
-                mesh = meshFilter != null ? meshFilter.sharedMesh : null;
-            }
-
-            if (mesh != null && mesh.vertexCount > 0)
-            {
-                Debug.Log($"Global mesh: {mesh.vertexCount} vertices, {mesh.triangles.Length / 3} triangles.");
-                ExportToOBJ(mesh, globalMeshAnchor.transform, "room_global_mesh");
-                foundMesh = true;
-            }
-            else
-            {
-                Debug.LogWarning("Global mesh anchor did not contain exportable mesh data.");
-            }
-        }
+        TryGetGlobalMesh(room, out Mesh globalMesh, out Transform globalMeshTransform);
 
         Mesh constructedMesh = ConstructMeshFromRoomPlanes(room);
         if (constructedMesh != null && constructedMesh.vertexCount > 0)
         {
             Debug.Log($"Constructed mesh: {constructedMesh.vertexCount} vertices, {constructedMesh.triangles.Length / 3} triangles.");
-            ExportToOBJ(constructedMesh, room.transform, "room_constructed_mesh");
-            ExportToOBJ(constructedMesh, room.transform, "room_scan");
-            wroteRoomScanAlias = true;
+            ExportToOBJ(constructedMesh, room.transform, "room_scan", true);
+            ExportToOBJ(constructedMesh, room.transform, "room_constructed_mesh", true);
+            foundMesh = true;
+            Debug.Log("Using constructed room planes as canonical export. room_scan.obj is the file shown in preview.");
+        }
+        else if (globalMesh != null && globalMeshTransform != null)
+        {
+            Debug.Log($"Using global mesh fallback: {globalMesh.vertexCount} vertices, {globalMesh.triangles.Length / 3} triangles.");
+            ExportToOBJ(globalMesh, globalMeshTransform, "room_scan", true);
+            ExportToOBJ(globalMesh, globalMeshTransform, "room_global_mesh", true);
             foundMesh = true;
         }
         else
         {
-            Debug.LogWarning("No plane geometry was available for room_constructed_mesh.obj.");
+            Debug.LogWarning("No plane or global mesh geometry was available for OBJ export.");
         }
 
         ExportIndividualPlanes(room);
         ExportSceneJSON(room);
-
-        if (!wroteRoomScanAlias && globalMeshAnchor != null)
-        {
-            Mesh mesh = globalMeshAnchor.GlobalMesh;
-            if (mesh != null && mesh.vertexCount > 0)
-            {
-                ExportToOBJ(mesh, globalMeshAnchor.transform, "room_scan");
-            }
-        }
 
         bool previewShown = foundMesh && LoadAndDisplayObjPreview(Path.Combine(Application.persistentDataPath, "room_scan.obj"));
         UpdateStatus(foundMesh
@@ -1189,23 +1277,56 @@ public class RoomMeshExporterUI : MonoBehaviour
 
     private MRUKRoom GetRoomForExport()
     {
-        if (IsExportableRoom(latestScannedRoom))
+        if (MRUK.Instance != null)
         {
-            return latestScannedRoom;
+            MRUKRoom selectedRoom = SelectRoomForLatestScanExport(MRUK.Instance, new List<MRUKRoom>());
+            if (IsExportableRoom(selectedRoom))
+            {
+                latestScannedRoom = selectedRoom;
+                return selectedRoom;
+            }
         }
 
-        if (MRUK.Instance == null)
-        {
-            return null;
-        }
-
-        latestScannedRoom = SelectRoomForLatestScanExport(MRUK.Instance, new List<MRUKRoom>());
-        return latestScannedRoom;
+        return IsExportableRoom(latestScannedRoom) ? latestScannedRoom : null;
     }
 
     private static string GetRoomId(MRUKRoom room)
     {
         return room != null ? room.Anchor.Uuid.ToString() : "none";
+    }
+
+    private static bool TryGetGlobalMesh(MRUKRoom room, out Mesh mesh, out Transform meshTransform)
+    {
+        mesh = null;
+        meshTransform = null;
+        MRUKAnchor globalMeshAnchor = room != null ? room.GlobalMeshAnchor : null;
+        if (globalMeshAnchor == null)
+        {
+            return false;
+        }
+
+        meshTransform = globalMeshAnchor.transform;
+        mesh = globalMeshAnchor.GlobalMesh;
+        if (mesh == null || mesh.vertexCount == 0)
+        {
+            MeshFilter meshFilter = globalMeshAnchor.GetComponent<MeshFilter>();
+            if (meshFilter == null)
+            {
+                meshFilter = globalMeshAnchor.GetComponentInChildren<MeshFilter>();
+            }
+
+            mesh = meshFilter != null ? meshFilter.sharedMesh : null;
+        }
+
+        if (mesh != null && mesh.vertexCount > 0)
+        {
+            Debug.Log($"Global mesh available: {mesh.vertexCount} vertices, {mesh.triangles.Length / 3} triangles.");
+            return true;
+        }
+
+        meshTransform = null;
+        Debug.LogWarning("Global mesh anchor did not contain exportable mesh data.");
+        return false;
     }
 
     private Mesh ConstructMeshFromRoomPlanes(MRUKRoom room)
@@ -1424,7 +1545,7 @@ public class RoomMeshExporterUI : MonoBehaviour
         return a.x * b.y - a.y * b.x;
     }
 
-    private void ExportToOBJ(Mesh mesh, Transform meshTransform, string filename)
+    private void ExportToOBJ(Mesh mesh, Transform meshTransform, string filename, bool centerVertices = false)
     {
         string path = Path.Combine(Application.persistentDataPath, filename + ".obj");
 
@@ -1437,10 +1558,27 @@ public class RoomMeshExporterUI : MonoBehaviour
         sb.AppendLine($"# Triangles: {mesh.triangles.Length / 3}");
         sb.AppendLine($"o {SanitizeObjName(filename)}");
 
-        foreach (Vector3 vertex in mesh.vertices)
+        Vector3[] exportedVertices = new Vector3[mesh.vertexCount];
+        Vector3[] sourceVertices = mesh.vertices;
+        Bounds exportBounds = new Bounds();
+        for (int i = 0; i < sourceVertices.Length; i++)
         {
-            Vector3 worldVertex = meshTransform.TransformPoint(vertex);
-            sb.AppendLine(FormattableString.Invariant($"v {worldVertex.x} {worldVertex.y} {worldVertex.z}"));
+            exportedVertices[i] = meshTransform.TransformPoint(sourceVertices[i]);
+            if (i == 0)
+            {
+                exportBounds = new Bounds(exportedVertices[i], Vector3.zero);
+            }
+            else
+            {
+                exportBounds.Encapsulate(exportedVertices[i]);
+            }
+        }
+
+        Vector3 exportCenter = centerVertices ? exportBounds.center : Vector3.zero;
+        for (int i = 0; i < exportedVertices.Length; i++)
+        {
+            Vector3 vertex = exportedVertices[i] - exportCenter;
+            sb.AppendLine(FormattableString.Invariant($"v {vertex.x} {vertex.y} {vertex.z}"));
         }
 
         bool hasNormals = mesh.normals != null && mesh.normals.Length == mesh.vertexCount;
@@ -1526,8 +1664,31 @@ public class RoomMeshExporterUI : MonoBehaviour
         meshRenderer.sharedMaterial = GetObjPreviewMaterial();
 
         PlaceObjPreviewInFrontOfUser(objPreviewObject.transform, mesh);
+        ShowInputFeedback("Preview loaded: joystick rotates, translucent shell shows inside");
         Debug.Log($"OBJ preview loaded from {objPath} with {mesh.vertexCount} vertices.");
         return true;
+    }
+
+    private void HandlePreviewControls()
+    {
+        if (objPreviewObject == null)
+        {
+            return;
+        }
+
+        Vector2 primaryStick = OVRInput.Get(OVRInput.Axis2D.PrimaryThumbstick);
+        Vector2 secondaryStick = OVRInput.Get(OVRInput.Axis2D.SecondaryThumbstick);
+        Vector2 stick = secondaryStick.sqrMagnitude > primaryStick.sqrMagnitude ? secondaryStick : primaryStick;
+        if (stick.sqrMagnitude < ThumbstickDeadZone * ThumbstickDeadZone)
+        {
+            return;
+        }
+
+        Transform centerEye = GetCenterEyeTransform();
+        Vector3 pitchAxis = centerEye != null ? centerEye.right : Vector3.right;
+        float rotationStep = PreviewRotateDegreesPerSecond * Time.unscaledDeltaTime;
+        objPreviewObject.transform.Rotate(Vector3.up, stick.x * rotationStep, Space.World);
+        objPreviewObject.transform.Rotate(pitchAxis, -stick.y * rotationStep, Space.World);
     }
 
     private static bool TryLoadObjMesh(string objPath, out Mesh mesh)
@@ -1676,7 +1837,7 @@ public class RoomMeshExporterUI : MonoBehaviour
         }
 
         objPreviewMaterial = CreateUnlitMaterial(PreviewColor);
-        objPreviewMaterial.SetInt("_Cull", (int)CullMode.Off);
+        ConfigureTransparentMaterial(objPreviewMaterial);
         return objPreviewMaterial;
     }
 
@@ -1743,6 +1904,35 @@ public class RoomMeshExporterUI : MonoBehaviour
         }
 
         return material;
+    }
+
+    private static void ConfigureTransparentMaterial(Material material)
+    {
+        if (material == null)
+        {
+            return;
+        }
+
+        if (material.HasProperty("_Surface"))
+        {
+            material.SetFloat("_Surface", 1f);
+        }
+        if (material.HasProperty("_Blend"))
+        {
+            material.SetFloat("_Blend", 0f);
+        }
+        if (material.HasProperty("_AlphaClip"))
+        {
+            material.SetFloat("_AlphaClip", 0f);
+        }
+
+        material.SetInt("_Cull", (int)CullMode.Off);
+        material.SetInt("_SrcBlend", (int)BlendMode.SrcAlpha);
+        material.SetInt("_DstBlend", (int)BlendMode.OneMinusSrcAlpha);
+        material.SetInt("_ZWrite", 0);
+        material.renderQueue = (int)RenderQueue.Transparent;
+        material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+        material.EnableKeyword("_ALPHABLEND_ON");
     }
 
     private static string FormatFaceIndex(int index, bool hasUvs, bool hasNormals)
