@@ -1,5 +1,6 @@
 import "server-only";
 import net from "node:net";
+import { estimateMeshPolycount } from "./gemma";
 
 const JSON_LIMIT_BYTES = 35 * 1024 * 1024;
 
@@ -102,19 +103,9 @@ export async function generateMeshyFurniture(body: Record<string, unknown>) {
     return jsonResponse({ error: "MESHY_API_KEY is not configured on the backend." }, { status: 503 });
   }
 
-  // We bias every furniture generation toward a low-poly stylized look:
-  //   - `model_type: "lowpoly"` is Meshy's official low-poly mode (when set,
-  //     `ai_model`, `topology`, `target_polycount`, and `should_remesh` are
-  //     ignored, per the v2 docs).
-  //   - Meshy v2 has no `negative_prompt` field, so style guidance is folded
-  //     into the prompt itself to reinforce the look.
-  const stylizedPrompt = [
-    prompt,
-    "low poly, simple geometry, faceted flat shading, minimalist stylized design,",
-    "clean silhouette, no fine detail, no ornate textures",
-  ].join(" ");
-
   try {
+    const targetPolycount = await estimateMeshPolycount(prompt);
+
     const createResponse = await fetch(`${meshyBase}/text-to-3d`, {
       method: "POST",
       headers: {
@@ -123,8 +114,9 @@ export async function generateMeshyFurniture(body: Record<string, unknown>) {
       },
       body: JSON.stringify({
         mode: "preview",
-        prompt: stylizedPrompt,
-        model_type: "lowpoly",
+        prompt,
+        art_style: "realistic",
+        target_polycount: targetPolycount,
         target_formats: ["glb"],
       }),
     });
