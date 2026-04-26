@@ -1,6 +1,6 @@
 import "server-only";
 import net from "node:net";
-import { estimateMeshPolycount } from "./gemma";
+import { estimateMeshPolycount, estimateRealWorldLength } from "./gemma";
 
 const JSON_LIMIT_BYTES = 35 * 1024 * 1024;
 
@@ -594,14 +594,7 @@ async function fetchSafeAsset(initialUrl: URL) {
   throw new Error("Asset redirect limit exceeded.");
 }
 
-// --- Real-world dimension estimation (Gemini) -------------------------------
-//
-// Uses Google's Generative Language API to estimate the longest physical
-// dimension of a furniture/object prompt in meters. We keep the call short and
-// constrained to a JSON shape so the client can blindly trust the number.
-
-const googleApiKey = process.env.GOOGLE_API_KEY;
-const dimensionModel = process.env.GOOGLE_DIMENSION_MODEL ?? "gemini-2.5-flash";
+// --- Real-world dimension estimation (Gemma 3 via SSH) ----------------------
 
 const MIN_LENGTH_METERS = 0.05;
 const MAX_LENGTH_METERS = 8;
@@ -609,85 +602,14 @@ const MAX_LENGTH_METERS = 8;
 export async function estimateModelLength(body: Record<string, unknown>) {
   const prompt = String(body.prompt ?? "").trim();
   if (!prompt) return jsonResponse({ error: "Missing prompt." }, { status: 400 });
-  if (!googleApiKey) {
-    return jsonResponse({ error: "GOOGLE_API_KEY is not configured." }, { status: 503 });
-  }
 
   try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-        dimensionModel,
-      )}:generateContent?key=${encodeURIComponent(googleApiKey)}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [
-            {
-              role: "user",
-              parts: [
-                {
-                  text: [
-                    "Estimate the typical real-world LONGEST dimension (in meters) of the",
-                    "following piece of furniture or object as it would appear in a normal home.",
-                    "Reply with strict JSON only: { \"lengthMeters\": <number> }.",
-                    "",
-                    `Item: ${prompt}`,
-                  ].join(" "),
-                },
-              ],
-            },
-          ],
-          generationConfig: {
-            temperature: 0.2,
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: "object",
-              properties: {
-                lengthMeters: { type: "number" },
-              },
-              required: ["lengthMeters"],
-            },
-          },
-        }),
-      },
-    );
-
-    if (!response.ok) {
-      return jsonResponse(
-        { error: await responseError(response, "Gemini dimension estimate failed") },
-        { status: response.status },
-      );
-    }
-
-    const data = (await response.json()) as {
-      candidates?: Array<{
-        content?: { parts?: Array<{ text?: string }> };
-      }>;
-    };
-
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) {
-      return jsonResponse({ error: "Gemini returned no content." }, { status: 502 });
-    }
-
-    let parsed: { lengthMeters?: unknown };
-    try {
-      parsed = JSON.parse(text) as { lengthMeters?: unknown };
-    } catch {
-      return jsonResponse({ error: "Gemini returned non-JSON output." }, { status: 502 });
-    }
-
-    const raw = Number(parsed.lengthMeters);
-    if (!Number.isFinite(raw) || raw <= 0) {
-      return jsonResponse({ error: "Gemini returned an invalid length." }, { status: 502 });
-    }
-
+    const raw = await estimateRealWorldLength(prompt);
     const lengthMeters = Math.min(MAX_LENGTH_METERS, Math.max(MIN_LENGTH_METERS, raw));
     return jsonResponse({ lengthMeters });
   } catch (error) {
     return jsonResponse(
-      { error: errorMessage(error, "Gemini dimension estimate failed.") },
+      { error: errorMessage(error, "Dimension estimate failed.") },
       { status: 500 },
     );
   }

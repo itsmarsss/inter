@@ -20,7 +20,9 @@
       "Bash(node -e \"require\\('ssh2'\\)\")",
       "Bash(git checkout *)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(node -e \"console.log\\(require\\('./node_modules/@react-three/xr/package.json'\\).version\\)\")",
+      "Bash(node -e \"require\\('ssh2'\\); console.log\\('ssh2 ok'\\)\")"
     ]
   }
 }

@@ -1,23 +1,20 @@
 import type { NextConfig } from "next";
 import path from "path";
 
-// stats-gl ships its own nested three@0.170.0 which creates a duplicate-instance
-// warning and breaks SparkJS material.onBuild (added after r155).
-// Force all three imports to the single root copy.
-const THREE_PATH = path.resolve(process.cwd(), "node_modules/three");
-
 const nextConfig: NextConfig = {
   output: "standalone",
   // ssh2 has a native addon (cpu-features) that Next.js cannot bundle
   serverExternalPackages: ["ssh2"],
-  // Force three.js deduplication for Turbopack (dev) and webpack (prod)
+  // Deduplicate three.js for Turbopack dev builds (stats-gl ships its own copy).
+  // Must use a relative path — Turbopack rejects absolute Windows paths.
   turbopack: {
     resolveAlias: {
-      three: THREE_PATH,
+      three: "./node_modules/three",
     },
   },
+  // Deduplicate three.js for production webpack builds (stats-gl ships its own copy)
   webpack(config) {
-    config.resolve.alias["three"] = THREE_PATH;
+    config.resolve.alias["three"] = path.resolve(process.cwd(), "node_modules/three");
     return config;
   },
 };
