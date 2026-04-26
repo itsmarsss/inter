@@ -260,12 +260,9 @@ const SCENE_COLORS = {
   extrusion: "#8C7B6B",
 } as const;
 
-const EDITING_MOUSE_BUTTONS: OrbitControlsImpl["mouseButtons"] = {
-  MIDDLE: THREE.MOUSE.ROTATE,
-  RIGHT: THREE.MOUSE.PAN,
-};
-
-const ALT_ORBIT_MOUSE_BUTTONS: OrbitControlsImpl["mouseButtons"] = {
+// Left drag orbits on empty space; object-drag sessions disable controls before
+// any movement occurs, so selection and furniture dragging are unaffected.
+const VIEWPORT_MOUSE_BUTTONS: OrbitControlsImpl["mouseButtons"] = {
   LEFT: THREE.MOUSE.ROTATE,
   MIDDLE: THREE.MOUSE.ROTATE,
   RIGHT: THREE.MOUSE.PAN,
@@ -768,43 +765,12 @@ function SceneContent({
 
   useEffect(() => {
     const element = gl.domElement;
-
-    function setLeftOrbitEnabled(enabled: boolean) {
-      const controls = orbitControlsRef.current;
-      if (!controls) return;
-      if (firstPersonActive) {
-        controls.enabled = false;
-        return;
-      }
-      controls.mouseButtons = enabled ? ALT_ORBIT_MOUSE_BUTTONS : EDITING_MOUSE_BUTTONS;
-    }
-
-    function handlePointerDown(event: PointerEvent) {
-      setLeftOrbitEnabled(event.button === 0 && event.altKey);
-    }
-
-    function resetMouseButtons() {
-      setLeftOrbitEnabled(false);
-    }
-
     function preventContextMenu(event: MouseEvent) {
       event.preventDefault();
     }
-
-    element.addEventListener("pointerdown", handlePointerDown, { capture: true });
     element.addEventListener("contextmenu", preventContextMenu);
-    window.addEventListener("pointerup", resetMouseButtons, { capture: true });
-    window.addEventListener("pointercancel", resetMouseButtons, { capture: true });
-    window.addEventListener("blur", resetMouseButtons);
-
-    return () => {
-      element.removeEventListener("pointerdown", handlePointerDown, { capture: true });
-      element.removeEventListener("contextmenu", preventContextMenu);
-      window.removeEventListener("pointerup", resetMouseButtons, { capture: true });
-      window.removeEventListener("pointercancel", resetMouseButtons, { capture: true });
-      window.removeEventListener("blur", resetMouseButtons);
-    };
-  }, [firstPersonActive, gl.domElement, viewMode]);
+    return () => element.removeEventListener("contextmenu", preventContextMenu);
+  }, [gl.domElement]);
 
   useEffect(() => {
     const element = gl.domElement;
@@ -829,7 +795,7 @@ function SceneContent({
       const offset = new THREE.Vector3().subVectors(camera.position, target);
       const spherical = new THREE.Spherical().setFromVector3(offset);
       const rotateSpeed = 0.0032;
-      spherical.theta += event.deltaX * rotateSpeed;
+      spherical.theta -= event.deltaX * rotateSpeed;
       spherical.phi += event.deltaY * rotateSpeed;
       spherical.phi = THREE.MathUtils.clamp(spherical.phi, 0.08, Math.PI / 2.05);
       spherical.makeSafe();
@@ -1961,10 +1927,9 @@ function SceneContent({
         ref={orbitControlsRef}
         makeDefault
         enabled={!firstPersonControlsActive && !xrPresenting}
-        enableDamping
-        dampingFactor={0.08}
         maxPolarAngle={Math.PI / 2.05}
-        mouseButtons={EDITING_MOUSE_BUTTONS}
+        rotateSpeed={-1}
+        mouseButtons={VIEWPORT_MOUSE_BUTTONS}
         touches={VIEWPORT_TOUCHES}
       />
       <FirstPersonController active={firstPersonControlsActive} />
