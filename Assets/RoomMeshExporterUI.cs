@@ -53,6 +53,10 @@ public class RoomMeshExporterUI : MonoBehaviour
     private float scanPressedUntil;
     private float exportPressedUntil;
     private float exportBlockedUntil;
+    private bool isDraggingPanel;
+    private Transform panelDragTransform;
+    private float panelDragDistance;
+    private Vector3 panelDragLocalOffset;
 
     private static readonly CultureInfo ObjCulture = CultureInfo.InvariantCulture;
 
@@ -261,7 +265,7 @@ public class RoomMeshExporterUI : MonoBehaviour
         }
 
         inputFeedbackText = FindOrCreateText(panel, "InputFeedbackText");
-        inputFeedbackText.text = "Aim + trigger, A scans, B exports";
+        inputFeedbackText.text = "Trigger buttons, A scans, B exports, hold panel to move";
         inputFeedbackText.fontSize = 23f;
         inputFeedbackText.alignment = TextAlignmentOptions.Center;
         inputFeedbackText.color = TextSecondaryColor;
@@ -378,12 +382,22 @@ public class RoomMeshExporterUI : MonoBehaviour
         Transform pointer = GetPointerTransform(FindAnyObjectByType<OVRCameraRig>());
         if (pointer == null || panelRect == null)
         {
+            EndPanelDrag(false);
             UpdateButtonVisuals(false, false);
             SetPointerFeedback(false, null, Vector2.zero);
             return;
         }
 
         Ray ray = new Ray(pointer.position, pointer.forward);
+        if (isDraggingPanel)
+        {
+            UpdatePanelDrag(pointer);
+            bool stillHitsPanel = TryGetPanelPoint(ray, out Vector2 dragPanelPoint);
+            UpdateButtonVisuals(false, false);
+            SetPointerFeedback(stillHitsPanel, pointer, dragPanelPoint);
+            return;
+        }
+
         if (!TryGetPanelPoint(ray, out Vector2 panelPoint))
         {
             UpdateButtonVisuals(false, false);
@@ -392,7 +406,8 @@ public class RoomMeshExporterUI : MonoBehaviour
         }
 
         bool scanHovered = IsPointInsideRect(scanButtonRect, panelPoint);
-        bool exportHovered = IsPointInsideRect(exportButtonRect, panelPoint) && CanExport();
+        bool exportButtonHit = IsPointInsideRect(exportButtonRect, panelPoint);
+        bool exportHovered = exportButtonHit && CanExport();
         UpdateButtonVisuals(scanHovered, exportHovered);
         SetPointerFeedback(true, pointer, panelPoint);
 
@@ -409,9 +424,105 @@ public class RoomMeshExporterUI : MonoBehaviour
         {
             ExportRoomMesh("EXPORT button");
         }
-        else if (IsPointInsideRect(exportButtonRect, panelPoint))
+        else if (exportButtonHit)
         {
             ShowExportBlocked("EXPORT button pressed - scan first");
+        }
+        else if (CanStartPanelDrag(panelPoint))
+        {
+            BeginPanelDrag(pointer, panelPoint);
+        }
+    }
+
+    private bool CanStartPanelDrag(Vector2 panelPoint)
+    {
+        return panelRect != null &&
+            panelRect.rect.Contains(panelPoint) &&
+            !IsPointInsideRect(scanButtonRect, panelPoint) &&
+            !IsPointInsideRect(exportButtonRect, panelPoint);
+    }
+
+    private void BeginPanelDrag(Transform pointer, Vector2 panelPoint)
+    {
+        panelDragTransform = GetPanelDragTransform();
+        if (panelDragTransform == null)
+        {
+            return;
+        }
+
+        Vector3 panelHitWorld = panelRect.TransformPoint(new Vector3(panelPoint.x, panelPoint.y, 0f));
+        panelDragDistance = Mathf.Clamp(Vector3.Dot(panelHitWorld - pointer.position, pointer.forward), 0.75f, 4f);
+        panelDragLocalOffset = panelDragTransform.InverseTransformPoint(panelHitWorld);
+        isDraggingPanel = true;
+        ShowInputFeedback("Dragging panel");
+    }
+
+    private void UpdatePanelDrag(Transform pointer)
+    {
+        if (!OVRInput.Get(OVRInput.Button.PrimaryIndexTrigger))
+        {
+            EndPanelDrag(true);
+            return;
+        }
+
+        if (panelDragTransform == null)
+        {
+            EndPanelDrag(false);
+            return;
+        }
+
+        Vector3 targetHitWorld = pointer.position + pointer.forward * panelDragDistance;
+        panelDragTransform.position = targetHitWorld - panelDragTransform.TransformVector(panelDragLocalOffset);
+        FacePanelTowardUser(panelDragTransform);
+        panelDragTransform.position = targetHitWorld - panelDragTransform.TransformVector(panelDragLocalOffset);
+        FacePanelTowardUser(panelDragTransform);
+    }
+
+    private void EndPanelDrag(bool showFeedback)
+    {
+        if (!isDraggingPanel)
+        {
+            return;
+        }
+
+        isDraggingPanel = false;
+        panelDragTransform = null;
+        if (showFeedback)
+        {
+            ShowInputFeedback("Panel moved");
+        }
+    }
+
+    private Transform GetPanelDragTransform()
+    {
+        if (panelRect == null)
+        {
+            return null;
+        }
+
+        Canvas canvas = panelRect.GetComponentInParent<Canvas>();
+        return canvas != null ? canvas.transform : panelRect;
+    }
+
+    private static void FacePanelTowardUser(Transform panelTransform)
+    {
+        OVRCameraRig cameraRig = FindAnyObjectByType<OVRCameraRig>();
+        Transform centerEye = cameraRig != null ? cameraRig.centerEyeAnchor : null;
+        if (centerEye == null)
+        {
+            return;
+        }
+
+        Vector3 lookDirection = panelTransform.position - centerEye.position;
+        Vector3 flatLookDirection = Vector3.ProjectOnPlane(lookDirection, Vector3.up);
+        if (flatLookDirection.sqrMagnitude > 0.001f)
+        {
+            lookDirection = flatLookDirection;
+        }
+
+        if (lookDirection.sqrMagnitude > 0.001f)
+        {
+            panelTransform.rotation = Quaternion.LookRotation(lookDirection.normalized, Vector3.up);
         }
     }
 
@@ -624,6 +735,10 @@ public class RoomMeshExporterUI : MonoBehaviour
         if (pointerDotRect != null)
         {
             pointerDotRect.gameObject.SetActive(panelHit);
+            if (pointerDotImage != null)
+            {
+                pointerDotImage.color = isDraggingPanel ? PressedButtonColor : PointerColor;
+            }
             if (panelHit)
             {
                 pointerDotRect.anchoredPosition = panelPoint;
@@ -642,6 +757,9 @@ public class RoomMeshExporterUI : MonoBehaviour
         }
 
         pointerLine.enabled = true;
+        Color lineStartColor = isDraggingPanel ? PressedButtonColor : PointerColor;
+        pointerLine.startColor = lineStartColor;
+        pointerLine.endColor = new Color(lineStartColor.r, lineStartColor.g, lineStartColor.b, 0.1f);
         pointerLine.SetPosition(0, pointer.position);
         pointerLine.SetPosition(1, panelHit
             ? panelRect.TransformPoint(new Vector3(panelPoint.x, panelPoint.y, 0f))

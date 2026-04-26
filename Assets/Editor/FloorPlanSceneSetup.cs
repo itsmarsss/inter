@@ -238,7 +238,7 @@ public static class FloorPlanSceneSetup
         title.color = TextPrimaryColor;
         title.fontStyle = FontStyles.Bold;
 
-        TextMeshProUGUI inputFeedback = CreateText(panel, "InputFeedbackText", "Aim + trigger, A scans, B exports", 23f, TextAlignmentOptions.Center, new Vector2(0f, -236f), new Vector2(740f, 40f));
+        TextMeshProUGUI inputFeedback = CreateText(panel, "InputFeedbackText", "Trigger buttons, A scans, B exports, hold panel to move", 23f, TextAlignmentOptions.Center, new Vector2(0f, -236f), new Vector2(740f, 40f));
         inputFeedback.color = TextSecondaryColor;
         return panel;
     }
