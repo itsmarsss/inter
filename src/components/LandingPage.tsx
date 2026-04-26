@@ -147,23 +147,59 @@ export default function LandingPage({ isTilting, onEnter }: LandingPageProps) {
               : "scale(1) translateY(18px)",
         }}
       >
-        {/* Eyebrow */}
-        <p
+        {/* Brand mark — INTER logo + wordmark */}
+        <div
           style={{
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: 10,
-            letterSpacing: "0.22em",
-            textTransform: "uppercase",
-            color: "rgba(255,255,255,0.3)",
-            margin: 0,
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
             marginBottom: 28,
             transition: "opacity 0.8s ease 0.05s, transform 0.8s ease 0.05s",
             opacity: uiVisible ? 1 : 0,
             transform: uiVisible ? "translateY(0)" : "translateY(8px)",
           }}
         >
-          3D Interior Studio
-        </p>
+          <img
+            src="/inter-logo.png"
+            alt="INTER"
+            width={28}
+            height={28}
+            style={{
+              display: "block",
+              opacity: 0.85,
+              filter: "drop-shadow(0 0 12px rgba(59,142,255,0.25))",
+            }}
+          />
+          <span
+            style={{
+              fontFamily: "'Bebas Neue', 'Arial Narrow', sans-serif",
+              fontSize: 22,
+              letterSpacing: "0.32em",
+              color: "rgba(255,255,255,0.78)",
+              userSelect: "none",
+            }}
+          >
+            INTER
+          </span>
+          <span
+            style={{
+              width: 1,
+              height: 14,
+              background: "rgba(255,255,255,0.18)",
+            }}
+          />
+          <span
+            style={{
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: 10,
+              letterSpacing: "0.22em",
+              textTransform: "uppercase",
+              color: "rgba(255,255,255,0.3)",
+            }}
+          >
+            3D Interior Studio
+          </span>
+        </div>
 
         {/* Headline */}
         <div
@@ -248,7 +284,7 @@ export default function LandingPage({ isTilting, onEnter }: LandingPageProps) {
           }}
         >
           <button className="landing-btn" onClick={handleEnter}>
-            Enter Studio
+            Enter INTER
             <span className="arrow">→</span>
           </button>
         </div>

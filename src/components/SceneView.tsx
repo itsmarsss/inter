@@ -3740,7 +3740,7 @@ function SplatViewportOverlay({ marble, loadState }: { marble: MarbleResult; loa
   return (
     <div className="pointer-events-none absolute inset-x-4 bottom-4 mx-auto max-w-sm rounded-md border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-overlay)_88%,transparent)] p-3 text-center text-sm text-[var(--color-text-primary)] shadow-[var(--shadow-float)] [backdrop-filter:var(--panel-blur)]">
       <div className="font-semibold">Loading generated room</div>
-      <p className="mt-1 text-pretty text-xs text-[var(--color-text-muted)]">Streaming the Marble SPZ asset into the viewport.</p>
+      <p className="mt-1 text-pretty text-xs text-[var(--color-text-muted)]">Streaming the generated splat asset into the viewport.</p>
     </div>
   );
 }

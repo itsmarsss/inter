@@ -21,8 +21,12 @@ const bebas = Bebas_Neue({
 });
 
 export const metadata: Metadata = {
-  title: "Marble Studio",
-  description: "AI-assisted interior design workspace.",
+  title: "INTER",
+  description: "INTER — AI-assisted interior design workspace.",
+  icons: {
+    icon: "/inter-logo.png",
+    apple: "/inter-logo.png",
+  },
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
