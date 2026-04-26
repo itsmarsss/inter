@@ -1,5 +1,6 @@
 import "server-only";
 import net from "node:net";
+import { estimateMeshPolycount } from "./gemma";
 
 const JSON_LIMIT_BYTES = 35 * 1024 * 1024;
 
@@ -103,6 +104,8 @@ export async function generateMeshyFurniture(body: Record<string, unknown>) {
   }
 
   try {
+    const targetPolycount = await estimateMeshPolycount(prompt);
+
     const createResponse = await fetch(`${meshyBase}/text-to-3d`, {
       method: "POST",
       headers: {
@@ -113,7 +116,7 @@ export async function generateMeshyFurniture(body: Record<string, unknown>) {
         mode: "preview",
         prompt,
         art_style: "realistic",
-        target_polycount: 30000,
+        target_polycount: targetPolycount,
         target_formats: ["glb"],
       }),
     });
