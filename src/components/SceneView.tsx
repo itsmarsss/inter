@@ -4781,6 +4781,19 @@ function GeneratedModel({
   // re-render.
   const { model, localBox, localSize } = useMemo(() => {
     const clone = gltf.scene.clone();
+    // Deep-clone materials so this instance owns its own material objects.
+    // gltf.scene.clone() copies the Object3D hierarchy but shares material
+    // references, so without this, two GeneratedModel instances with different
+    // opacities (e.g. a placed instance at 1.0 and the drag ghost at 0.45)
+    // fight over the same material and produce incorrect rendering.
+    clone.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      if (Array.isArray(object.material)) {
+        object.material = (object.material as THREE.Material[]).map((m) => m.clone());
+      } else if (object.material) {
+        object.material = (object.material as THREE.Material).clone();
+      }
+    });
     const box = new THREE.Box3().setFromObject(clone);
     const size = new THREE.Vector3();
     if (!box.isEmpty()) box.getSize(size);
@@ -4833,6 +4846,17 @@ function GeneratedModel({
       });
     });
   }, [model, opacity]);
+
+  // Dispose cloned materials on unmount to avoid GPU memory leaks.
+  useEffect(() => {
+    return () => {
+      model.traverse((object) => {
+        if (!(object instanceof THREE.Mesh)) return;
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        materials.forEach((m) => { if (m) m.dispose(); });
+      });
+    };
+  }, [model]);
 
   return (
     <group>

@@ -59,6 +59,7 @@ type PrecisionLayoutProps = {
   onRemoveDoor: (id: string) => void;
   onRemoveWindow: (id: string) => void;
   onRemoveFurnitureInstance: (id: string) => void;
+  onRotateFurnitureInstance: (id: string, deltaRad: number) => void;
   onRemoveWallSegment: (wall: WallId, id: string) => void;
   onResetWallSegments: () => void;
 
@@ -103,6 +104,7 @@ export function PrecisionLayout({
   onRemoveDoor,
   onRemoveWindow,
   onRemoveFurnitureInstance,
+  onRotateFurnitureInstance,
   onRemoveWallSegment,
   onResetWallSegments,
   onGenerateFurniture,
@@ -206,6 +208,7 @@ export function PrecisionLayout({
             onRemoveDoor={onRemoveDoor}
             onRemoveWindow={onRemoveWindow}
             onRemoveFurnitureInstance={onRemoveFurnitureInstance}
+            onRotateFurnitureInstance={onRotateFurnitureInstance}
             onRemoveWallSegment={onRemoveWallSegment}
             onResetWallSegments={onResetWallSegments}
             onClose={() => setPanelOpen(false)}

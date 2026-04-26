@@ -13,12 +13,13 @@ import {
   Plus,
   RectangleHorizontal,
   RotateCcw,
+  RotateCw,
   Scissors,
   Square,
   Trash2,
   Triangle,
 } from "lucide-react";
-import { type ComponentType, type ReactNode, useState } from "react";
+import { type ComponentType, Fragment, type ReactNode, useState } from "react";
 import type {
   CustomShape,
   Door,
@@ -51,6 +52,7 @@ type ObjectsPanelProps = {
   onRemoveDoor: (id: string) => void;
   onRemoveWindow: (id: string) => void;
   onRemoveFurnitureInstance: (id: string) => void;
+  onRotateFurnitureInstance: (id: string, deltaRad: number) => void;
   onRemoveWallSegment: (wall: WallId, id: string) => void;
   onResetWallSegments: () => void;
   onClose: () => void;
@@ -109,6 +111,7 @@ export function ObjectsPanel({
   onRemoveDoor,
   onRemoveWindow,
   onRemoveFurnitureInstance,
+  onRotateFurnitureInstance,
   onRemoveWallSegment,
   onResetWallSegments,
   onClose,
@@ -161,16 +164,26 @@ export function ObjectsPanel({
           <>
             <Divider />
             <ListSection label="Placed Furniture" count={furnitureInstances.length}>
-              {furnitureInstances.map((instance) => (
-                <ItemRow
-                  key={instance.id}
-                  icon={Box}
-                  label={instance.name}
-                  selected={selected?.type === "furniture" && selected.id === instance.id}
-                  onSelect={() => onSelect({ type: "furniture", id: instance.id })}
-                  onRemove={() => onRemoveFurnitureInstance(instance.id)}
-                />
-              ))}
+              {furnitureInstances.map((instance) => {
+                const isSelected = selected?.type === "furniture" && selected.id === instance.id;
+                return (
+                  <Fragment key={instance.id}>
+                    <ItemRow
+                      icon={Box}
+                      label={instance.name}
+                      selected={isSelected}
+                      onSelect={() => onSelect({ type: "furniture", id: instance.id })}
+                      onRemove={() => onRemoveFurnitureInstance(instance.id)}
+                    />
+                    {isSelected && (
+                      <RotationStrip
+                        rotationY={instance.rotation[1]}
+                        onRotate={(delta) => onRotateFurnitureInstance(instance.id, delta)}
+                      />
+                    )}
+                  </Fragment>
+                );
+              })}
             </ListSection>
           </>
         ) : null}
@@ -647,6 +660,104 @@ function RowAction({
       }}
     >
       {icon}
+    </button>
+  );
+}
+
+function RotationStrip({
+  rotationY,
+  onRotate,
+}: {
+  rotationY: number;
+  onRotate: (deltaRad: number) => void;
+}) {
+  const deg = Math.round(((rotationY * 180) / Math.PI % 360 + 360) % 360);
+  const steps: Array<{ label: string; delta: number; icon?: ReactNode }> = [
+    { label: "−90°", delta: -Math.PI / 2, icon: <RotateCcw size={9} strokeWidth={1.6} /> },
+    { label: "−45°", delta: -Math.PI / 4 },
+    { label: "+45°", delta: Math.PI / 4 },
+    { label: "+90°", delta: Math.PI / 2, icon: <RotateCw size={9} strokeWidth={1.6} /> },
+  ];
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 3,
+        padding: "3px 8px 4px 28px",
+        background: "rgba(59,142,255,0.05)",
+        borderBottom: "1px solid var(--border-dim)",
+        marginBottom: 1,
+      }}
+    >
+      <span
+        style={{
+          fontSize: 9,
+          fontFamily: "var(--font-mono)",
+          color: "var(--text-secondary)",
+          letterSpacing: "0.1em",
+          textTransform: "uppercase",
+          marginRight: 4,
+        }}
+      >
+        Rot
+      </span>
+      <span
+        style={{
+          fontSize: 11,
+          fontFamily: "var(--font-mono)",
+          color: "var(--accent-text)",
+          minWidth: 34,
+        }}
+      >
+        {deg}°
+      </span>
+      <div style={{ flex: 1 }} />
+      {steps.map(({ label, delta, icon }) => (
+        <RotateStepButton key={label} label={label} icon={icon} onClick={() => onRotate(delta)} />
+      ))}
+    </div>
+  );
+}
+
+function RotateStepButton({
+  label,
+  icon,
+  onClick,
+}: {
+  label: string;
+  icon?: ReactNode;
+  onClick: () => void;
+}) {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <button
+      type="button"
+      aria-label={`Rotate ${label}`}
+      title={`Rotate ${label}`}
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        height: 18,
+        minWidth: 28,
+        padding: "0 4px",
+        borderRadius: 2,
+        border: `1px solid ${hovered ? "var(--border-mid)" : "var(--border-dim)"}`,
+        background: hovered ? "var(--surface-overlay)" : "transparent",
+        color: hovered ? "var(--text-bright)" : "var(--text-secondary)",
+        fontSize: 9,
+        fontFamily: "var(--font-mono)",
+        cursor: "pointer",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 2,
+        transition: "all 100ms",
+      }}
+    >
+      {icon}
+      {label}
     </button>
   );
 }

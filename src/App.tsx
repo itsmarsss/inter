@@ -56,18 +56,38 @@ export default function App({ entering = false }: { entering?: boolean }) {
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key !== "Delete" && event.key !== "Backspace") return;
       const target = event.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
-      setState((current) => {
-        if (current.selected?.type !== "furniture") return current;
-        const id = current.selected.id;
-        return {
-          ...current,
-          furnitureInstances: current.furnitureInstances.filter((i) => i.id !== id),
-          selected: null,
-        };
-      });
+
+      if (event.key === "Delete" || event.key === "Backspace") {
+        setState((current) => {
+          if (current.selected?.type !== "furniture") return current;
+          const id = current.selected.id;
+          return {
+            ...current,
+            furnitureInstances: current.furnitureInstances.filter((i) => i.id !== id),
+            selected: null,
+          };
+        });
+        return;
+      }
+
+      // [ and ] rotate the selected furniture by ±15°
+      if (event.key === "[" || event.key === "]") {
+        const delta = event.key === "[" ? -Math.PI / 12 : Math.PI / 12;
+        setState((current) => {
+          if (current.selected?.type !== "furniture") return current;
+          const id = current.selected.id;
+          return {
+            ...current,
+            furnitureInstances: current.furnitureInstances.map((i) =>
+              i.id === id
+                ? { ...i, rotation: [i.rotation[0], i.rotation[1] + delta, i.rotation[2]] as [number, number, number] }
+                : i,
+            ),
+          };
+        });
+      }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
@@ -312,6 +332,17 @@ export default function App({ entering = false }: { entering?: boolean }) {
     }));
   }
 
+  function handleRotateFurnitureInstance(id: string, deltaRad: number) {
+    setState((current) => ({
+      ...current,
+      furnitureInstances: current.furnitureInstances.map((i) =>
+        i.id === id
+          ? { ...i, rotation: [i.rotation[0], i.rotation[1] + deltaRad, i.rotation[2]] as [number, number, number] }
+          : i,
+      ),
+    }));
+  }
+
   async function handleSaveAsset(asset: FurnitureAsset) {
     if (!asset.modelUrl || savingAssetId) return;
     setSavingAssetId(asset.id);
@@ -542,6 +573,7 @@ export default function App({ entering = false }: { entering?: boolean }) {
       onRemoveDoor={handleRemoveDoor}
       onRemoveWindow={handleRemoveWindow}
       onRemoveFurnitureInstance={handleRemoveFurnitureInstance}
+      onRotateFurnitureInstance={handleRotateFurnitureInstance}
       onRemoveWallSegment={handleRemoveWallSegment}
       onResetWallSegments={handleResetWallSegments}
       onGenerateFurniture={handleGenerateFurniture}
