@@ -3,6 +3,7 @@
 import { Trash2 } from "lucide-react";
 import { useState } from "react";
 import type { LibraryEntry } from "../../state/types";
+import { setDragAssetId } from "../../state/dragAsset";
 import { FurnitureSilhouette } from "./AssetCard";
 
 type LibraryCardProps = {
@@ -19,7 +20,9 @@ export function LibraryCard({ entry, onDelete }: LibraryCardProps) {
       onDragStart={(e) => {
         e.dataTransfer.setData("application/x-furniture-asset", entry.id);
         e.dataTransfer.effectAllowed = "copy";
+        setDragAssetId(entry.id);
       }}
+      onDragEnd={() => setDragAssetId(null)}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{

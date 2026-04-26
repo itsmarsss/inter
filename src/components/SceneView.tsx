@@ -48,6 +48,7 @@ import type {
   WindowOpening,
 } from "../state/types";
 import { cn } from "../lib/cn";
+import { getDragAssetId } from "../state/dragAsset";
 
 type SceneViewProps = {
   room: RoomBounds;
@@ -440,6 +441,8 @@ function selectedRefMatches(left: NonNullable<SelectedRef>, right: SelectedRef) 
 
 export function SceneView(props: SceneViewProps) {
   const projectorRef = useRef<Projector | null>(null);
+  const [dragGhost, setDragGhost] = useState<{ assetId: string; position: Vec3 | null } | null>(null);
+  const dragEnterCountRef = useRef(0);
   const [objectSplatMode, setObjectSplatMode] = useState<ObjectSplatMode>("off");
   const [splatLoadState, setSplatLoadState] = useState<SplatLoadState>({ status: "idle" });
   const [splatAlignmentState, setSplatAlignmentState] = useState<{
@@ -493,8 +496,34 @@ export function SceneView(props: SceneViewProps) {
     <div
       className="relative h-full min-h-0 bg-[var(--color-background)]"
       title="Viewport navigation: two-finger swipe, middle mouse, or Alt-drag orbits; right mouse pans."
-      onDragOver={(event) => event.preventDefault()}
-      onDrop={handleDrop}
+      onDragEnter={() => {
+        dragEnterCountRef.current += 1;
+        if (dragEnterCountRef.current === 1) {
+          const assetId = getDragAssetId();
+          if (assetId) setDragGhost({ assetId, position: null });
+        }
+      }}
+      onDragOver={(event) => {
+        event.preventDefault();
+        if (!dragGhost) return;
+        const raw = projectorRef.current?.(event.clientX, event.clientY);
+        if (raw) {
+          const clamped = clampToFloor(raw, props.room, props.wallSegments);
+          setDragGhost((prev) => (prev ? { ...prev, position: clamped } : null));
+        }
+      }}
+      onDragLeave={() => {
+        dragEnterCountRef.current -= 1;
+        if (dragEnterCountRef.current <= 0) {
+          dragEnterCountRef.current = 0;
+          setDragGhost(null);
+        }
+      }}
+      onDrop={(event) => {
+        dragEnterCountRef.current = 0;
+        setDragGhost(null);
+        handleDrop(event);
+      }}
     >
       <Canvas
         shadows
@@ -526,6 +555,11 @@ export function SceneView(props: SceneViewProps) {
             firstPersonActive={firstPersonActive}
             onSplatLoadStateChange={setSplatLoadState}
             setProjector={(projector) => (projectorRef.current = projector)}
+            dragGhost={(() => {
+              if (!dragGhost?.position) return undefined;
+              const asset = props.assetById?.get(dragGhost.assetId) ?? props.assets.find((a) => a.id === dragGhost.assetId);
+              return asset ? { asset, position: dragGhost.position } : undefined;
+            })()}
           />
         </XR>
       </Canvas>
@@ -615,6 +649,7 @@ function SceneContent({
   firstPersonActive,
   onSplatLoadStateChange,
   setProjector,
+  dragGhost,
 }: SceneViewProps & {
   viewMode: ViewMode;
   generatedAvailable: boolean;
@@ -626,6 +661,7 @@ function SceneContent({
   firstPersonActive: boolean;
   onSplatLoadStateChange: (state: SplatLoadState) => void;
   setProjector: (projector: Projector) => void;
+  dragGhost?: { asset: FurnitureAsset; position: Vec3 };
 }) {
   const orbitControlsRef = useRef<OrbitControlsImpl>(null);
   const roomRef = useRef(room);
@@ -1966,6 +2002,14 @@ function SceneContent({
             />
           );
         })}
+        {dragGhost && viewMode === "blockout" && (
+          <DragGhostNode
+            asset={dragGhost.asset}
+            position={dragGhost.position}
+            room={room}
+            wallSegments={wallSegments}
+          />
+        )}
         {shapes.map((shape) => (
           <ShapeNode
             key={shape.id}
@@ -4182,6 +4226,59 @@ function ConnectorMesh({ wall, depth, height, position, opacity, highlight }: Co
         />
       </mesh>
     </group>
+  );
+}
+
+function DragGhostNode({
+  asset,
+  position,
+  room,
+  wallSegments,
+}: {
+  asset: FurnitureAsset;
+  position: Vec3;
+  room: RoomBounds;
+  wallSegments: WallSegmentation;
+}) {
+  const modelUrl = asset.modelUrl ? proxiedModelUrl(asset.modelUrl) : undefined;
+  const snapped = clampToFloor(position, room, wallSegments);
+
+  return (
+    <group position={snapped}>
+      <Suspense fallback={<PrimitiveFurniture primitive={asset.primitive} selected={false} hovered={false} opacity={0.45} />}>
+        {modelUrl ? (
+          <GeneratedModelBoundary
+            resetKey={modelUrl}
+            fallback={<PrimitiveFurniture primitive={asset.primitive} selected={false} hovered={false} opacity={0.45} />}
+          >
+            <GeneratedModel
+              url={modelUrl}
+              selected={false}
+              hovered={false}
+              opacity={0.45}
+              realLengthMeters={asset.realLengthMeters}
+            />
+          </GeneratedModelBoundary>
+        ) : (
+          <PrimitiveFurniture primitive={asset.primitive} selected={false} hovered={false} opacity={0.45} />
+        )}
+      </Suspense>
+      <GhostPlacementRing />
+    </group>
+  );
+}
+
+function GhostPlacementRing() {
+  const meshRef = useRef<THREE.Mesh>(null);
+  useFrame(({ clock }) => {
+    const mat = (meshRef.current as THREE.Mesh | null)?.material as THREE.MeshBasicMaterial | undefined;
+    if (mat) mat.opacity = 0.28 + 0.22 * Math.sin(clock.elapsedTime * 5);
+  });
+  return (
+    <mesh ref={meshRef} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.005, 0]}>
+      <ringGeometry args={[0.38, 0.46, 48]} />
+      <meshBasicMaterial color="#3b8eff" transparent opacity={0.4} depthWrite={false} />
+    </mesh>
   );
 }
 

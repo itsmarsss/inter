@@ -3,6 +3,7 @@
 import { Bookmark } from "lucide-react";
 import { useState } from "react";
 import type { FurnitureAsset } from "../../state/types";
+import { setDragAssetId } from "../../state/dragAsset";
 
 export function FurnitureSilhouette({ primitive }: { primitive: FurnitureAsset["primitive"] }) {
   const c = "var(--text-ghost)";
@@ -120,9 +121,11 @@ export function AssetCard({ asset, selected, onSelect, onSave, saving }: AssetCa
           ? (e) => {
               e.dataTransfer.setData("application/x-furniture-asset", asset.id);
               e.dataTransfer.effectAllowed = "copy";
+              setDragAssetId(asset.id);
             }
           : undefined
       }
+      onDragEnd={isReady ? () => setDragAssetId(null) : undefined}
       style={{
         position: "relative",
         display: "flex",
