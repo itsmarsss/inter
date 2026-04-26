@@ -2,8 +2,13 @@ import "server-only";
 import { Client } from "ssh2";
 
 const DEFAULT_POLYCOUNT = 30000;
-const DEFAULT_LENGTH_METERS = 1.0;
+const DEFAULT_LENGTH_METERS = 2.0;
 const SSH_TIMEOUT_MS = 30000;
+
+// Meshy preview models are generated at a larger-than-real internal scale.
+// Multiplying the real-world dimension by this factor keeps s = length/longest > 1
+// so furniture appears at an appropriate size in the scene rather than shrinking.
+const LENGTH_SCALE = 3;
 
 // --- shared SSH helper -------------------------------------------------------
 
@@ -45,7 +50,7 @@ function sshExec(cmd: string): Promise<string | null> {
 
 function ollamaCmd(prompt: string): string {
   const body = JSON.stringify({
-    model: "gemma3:12b",
+    model: "gemma3:4b",
     prompt,
     stream: false,
   });
@@ -107,5 +112,5 @@ export async function estimateRealWorldLength(furniturePrompt: string): Promise<
   if (!match) return DEFAULT_LENGTH_METERS;
   const value = parseFloat(match[0]);
   if (!Number.isFinite(value) || value <= 0) return DEFAULT_LENGTH_METERS;
-  return value;
+  return value * LENGTH_SCALE;
 }
