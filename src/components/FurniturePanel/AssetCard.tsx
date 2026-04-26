@@ -1,11 +1,11 @@
 "use client";
 
-import { Sparkles } from "lucide-react";
+import { Bookmark, Sparkles } from "lucide-react";
 import { useState } from "react";
 import type { FurnitureAsset } from "../../state/types";
 import { StatusBadge } from "./StatusBadge";
 
-function FurnitureSilhouette({ primitive }: { primitive: FurnitureAsset["primitive"] }) {
+export function FurnitureSilhouette({ primitive }: { primitive: FurnitureAsset["primitive"] }) {
   const c = "var(--text-ghost)";
 
   if (primitive === "table") {
@@ -86,9 +86,11 @@ type AssetCardProps = {
   asset: FurnitureAsset;
   selected: boolean;
   onSelect: () => void;
+  onSave?: () => void;
+  saving?: boolean;
 };
 
-export function AssetCard({ asset, selected, onSelect }: AssetCardProps) {
+export function AssetCard({ asset, selected, onSelect, onSave, saving }: AssetCardProps) {
   const [hovered, setHovered] = useState(false);
   const isReady = asset.status === "ready" || asset.status === "mock";
 
@@ -224,10 +226,38 @@ export function AssetCard({ asset, selected, onSelect }: AssetCardProps) {
                 fontSize: 10,
                 color: "var(--accent-text)",
                 fontFamily: "var(--font-mono)",
+                flex: 1,
               }}
             >
               {asset.modelUrl ? "GLB ready" : "model pending"}
             </span>
+            {onSave && asset.modelUrl && (
+              <button
+                type="button"
+                aria-label="Save to library"
+                onClick={(e) => { e.stopPropagation(); onSave(); }}
+                disabled={saving}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 3,
+                  padding: "1px 5px",
+                  borderRadius: 3,
+                  border: "1px solid var(--border-dim)",
+                  background: "transparent",
+                  color: saving ? "var(--text-ghost)" : "var(--text-secondary)",
+                  fontSize: 9,
+                  fontFamily: "var(--font-mono)",
+                  cursor: saving ? "default" : "pointer",
+                  transition: "color 100ms, border-color 100ms",
+                  flexShrink: 0,
+                  lineHeight: 1.6,
+                }}
+              >
+                <Bookmark size={9} strokeWidth={1.5} />
+                {saving ? "saving…" : "save"}
+              </button>
+            )}
           </div>
         )}
 

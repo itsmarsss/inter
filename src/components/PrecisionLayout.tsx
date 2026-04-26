@@ -6,6 +6,7 @@ import type {
   Door,
   FurnitureAsset,
   FurnitureAssetMap,
+  LibraryEntry,
   MarbleResult,
   RoomBounds,
   SceneCamera,
@@ -59,6 +60,11 @@ type PrecisionLayoutProps = {
   onResetWallSegments: () => void;
 
   onGenerateFurniture: (prompt: string) => void;
+  libraryEntries: LibraryEntry[];
+  savingAssetId: string | null;
+  onSaveAsset: (asset: FurnitureAsset) => void;
+  onDeleteLibraryEntry: (id: string) => void;
+  onLoadLibraryEntry: (entry: LibraryEntry) => void;
   upload: UploadStatus;
   stylePrompt: string;
   onStylePromptChange: (prompt: string) => void;
@@ -96,6 +102,11 @@ export function PrecisionLayout({
   onRemoveWallSegment,
   onResetWallSegments,
   onGenerateFurniture,
+  libraryEntries,
+  savingAssetId,
+  onSaveAsset,
+  onDeleteLibraryEntry,
+  onLoadLibraryEntry,
   upload,
   stylePrompt,
   onStylePromptChange,
@@ -202,8 +213,13 @@ export function PrecisionLayout({
           <FurniturePanel
             open={panelOpen && activeSection === "furniture"}
             assets={furnitureAssets}
+            libraryEntries={libraryEntries}
+            savingAssetId={savingAssetId}
             onGenerate={onGenerateFurniture}
             onUploadModel={onUploadModel}
+            onSaveAsset={onSaveAsset}
+            onDeleteLibraryEntry={onDeleteLibraryEntry}
+            onLoadLibraryEntry={onLoadLibraryEntry}
             onClose={() => setPanelOpen(false)}
           />
         </div>

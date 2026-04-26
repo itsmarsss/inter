@@ -8,6 +8,12 @@ import {
   startFurnitureMeshyTask,
 } from "./api/meshy";
 import { estimateModelLength } from "./api/dimension";
+import {
+  deleteAssetFromLibrary,
+  fetchLibrary,
+  libraryEntryToAsset,
+  saveAssetToLibrary,
+} from "./api/library";
 import { PrecisionLayout } from "./components/PrecisionLayout";
 import { SceneView } from "./components/SceneView";
 import { BlueprintView } from "./components/BlueprintView";
@@ -23,16 +29,22 @@ import {
   initialState,
   removeWallSegment,
 } from "./state/editor";
-import type { CaptureImage, EditorState } from "./state/types";
+import type { CaptureImage, EditorState, FurnitureAsset, LibraryEntry } from "./state/types";
 
 export default function App({ entering = false }: { entering?: boolean }) {
   const [state, setState] = useState<EditorState>(() => ({ ...initialState }));
   const [viewMode, setViewMode] = useState<ViewMode>("Block");
+  const [libraryEntries, setLibraryEntries] = useState<LibraryEntry[]>([]);
+  const [savingAssetId, setSavingAssetId] = useState<string | null>(null);
   const sceneCaptureRef = useRef<() => CaptureImage | undefined>(() => undefined);
   const blueprintCaptureRef = useRef<() => string | undefined>(() => undefined);
   const generationRunRef = useRef(0);
   const furnitureStreamsRef = useRef<Map<string, EventSource>>(new Map());
   const assetById = useMemo(() => buildFurnitureAssetMap(state.furnitureAssets), [state.furnitureAssets]);
+
+  useEffect(() => {
+    fetchLibrary().then(setLibraryEntries);
+  }, []);
 
   const registerSceneCapture = useCallback((capture: () => CaptureImage | undefined) => {
     sceneCaptureRef.current = capture;
@@ -262,6 +274,29 @@ export default function App({ entering = false }: { entering?: boolean }) {
     }));
   }
 
+  async function handleSaveAsset(asset: FurnitureAsset) {
+    if (!asset.modelUrl || savingAssetId) return;
+    setSavingAssetId(asset.id);
+    const entry = await saveAssetToLibrary(asset);
+    setSavingAssetId(null);
+    if (entry) {
+      setLibraryEntries((current) => [entry, ...current.filter((e) => e.id !== entry.id)]);
+    }
+  }
+
+  async function handleDeleteLibraryEntry(id: string) {
+    await deleteAssetFromLibrary(id);
+    setLibraryEntries((current) => current.filter((e) => e.id !== id));
+  }
+
+  function handleLoadLibraryEntry(entry: LibraryEntry) {
+    const asset = libraryEntryToAsset(entry);
+    setState((current) => ({
+      ...current,
+      furnitureAssets: [asset, ...current.furnitureAssets],
+    }));
+  }
+
   const setRoom: React.ComponentProps<typeof SceneView>["onRoomChange"] = (room) =>
     setState((current) => ({
       ...current,
@@ -467,6 +502,11 @@ export default function App({ entering = false }: { entering?: boolean }) {
       onRemoveWallSegment={handleRemoveWallSegment}
       onResetWallSegments={handleResetWallSegments}
       onGenerateFurniture={handleGenerateFurniture}
+      libraryEntries={libraryEntries}
+      savingAssetId={savingAssetId}
+      onSaveAsset={handleSaveAsset}
+      onDeleteLibraryEntry={handleDeleteLibraryEntry}
+      onLoadLibraryEntry={handleLoadLibraryEntry}
       upload={state.upload}
       stylePrompt={state.stylePrompt}
       onStylePromptChange={(stylePrompt) => setState((current) => ({ ...current, stylePrompt }))}

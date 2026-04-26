@@ -1,19 +1,36 @@
 "use client";
 
-import { FileUp, Minus, Package, Plus, Sparkles } from "lucide-react";
+import { BookMarked, FileUp, Minus, Package, Plus, Sparkles } from "lucide-react";
 import { type ReactNode, useRef, useState } from "react";
-import type { FurnitureAsset } from "../../state/types";
+import type { FurnitureAsset, LibraryEntry } from "../../state/types";
 import { AssetCard } from "./AssetCard";
+import { LibraryCard } from "./LibraryCard";
 
 type FurniturePanelProps = {
   open: boolean;
   assets: FurnitureAsset[];
+  libraryEntries: LibraryEntry[];
+  savingAssetId: string | null;
   onGenerate: (prompt: string) => void;
   onUploadModel?: (file: File) => void;
+  onSaveAsset: (asset: FurnitureAsset) => void;
+  onDeleteLibraryEntry: (id: string) => void;
+  onLoadLibraryEntry: (entry: LibraryEntry) => void;
   onClose: () => void;
 };
 
-export function FurniturePanel({ open, assets, onGenerate, onUploadModel, onClose }: FurniturePanelProps) {
+export function FurniturePanel({
+  open,
+  assets,
+  libraryEntries,
+  savingAssetId,
+  onGenerate,
+  onUploadModel,
+  onSaveAsset,
+  onDeleteLibraryEntry,
+  onLoadLibraryEntry,
+  onClose,
+}: FurniturePanelProps) {
   const [inputValue, setInputValue] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [inputFocused, setInputFocused] = useState(false);
@@ -149,54 +166,12 @@ export function FurniturePanel({ open, assets, onGenerate, onUploadModel, onClos
         <AddButton onClick={handleAdd} disabled={!inputValue.trim()} />
       </div>
 
-      {/* Section header */}
-      <div
-        style={{
-          padding: "0 12px",
-          height: 30,
-          display: "flex",
-          alignItems: "center",
-          gap: 6,
-          borderBottom: "1px solid var(--border-dim)",
-          flexShrink: 0,
-        }}
-      >
-        <Sparkles size={11} strokeWidth={1.5} color="var(--accent-text)" />
-        <span
-          style={{
-            fontSize: 10,
-            fontWeight: 400,
-            color: "var(--text-primary)",
-            letterSpacing: "0.08em",
-            textTransform: "uppercase",
-            flex: 1,
-            fontFamily: "var(--font-ui)",
-          }}
-        >
-          Available Meshys
-        </span>
-        <span
-          style={{
-            fontSize: 10,
-            fontWeight: 500,
-            background: "var(--accent-dim)",
-            color: "var(--accent-text)",
-            padding: "1px 6px",
-            borderRadius: 3,
-            border: "1px solid var(--accent-border)",
-            fontFamily: "var(--font-mono)",
-            lineHeight: 1.5,
-          }}
-        >
-          {assets.length}
-        </span>
-      </div>
+      {/* Scrollable content */}
+      <div className="precision-scroll" style={{ flex: 1, overflowY: "auto" }}>
+        {/* Session section header */}
+        <SectionHeader icon={<Sparkles size={11} strokeWidth={1.5} color="var(--accent-text)" />} label="Available Meshys" count={assets.length} />
 
-      {/* Asset list */}
-      <div
-        className="precision-scroll"
-        style={{ flex: 1, overflowY: "auto" }}
-      >
+        {/* Session asset list */}
         {assets.length === 0 ? (
           <EmptyState />
         ) : (
@@ -206,10 +181,91 @@ export function FurniturePanel({ open, assets, onGenerate, onUploadModel, onClos
               asset={asset}
               selected={selectedId === asset.id}
               onSelect={() => setSelectedId(selectedId === asset.id ? null : asset.id)}
+              onSave={() => onSaveAsset(asset)}
+              saving={savingAssetId === asset.id}
+            />
+          ))
+        )}
+
+        {/* Library section header */}
+        <SectionHeader
+          icon={<BookMarked size={11} strokeWidth={1.5} color="var(--accent-text)" />}
+          label="My Library"
+          count={libraryEntries.length}
+          topBorder
+        />
+
+        {/* Library list */}
+        {libraryEntries.length === 0 ? (
+          <LibraryEmptyState />
+        ) : (
+          libraryEntries.map((entry) => (
+            <LibraryCard
+              key={entry.id}
+              entry={entry}
+              onLoad={() => onLoadLibraryEntry(entry)}
+              onDelete={() => onDeleteLibraryEntry(entry.id)}
             />
           ))
         )}
       </div>
+    </div>
+  );
+}
+
+function SectionHeader({
+  icon,
+  label,
+  count,
+  topBorder,
+}: {
+  icon: ReactNode;
+  label: string;
+  count: number;
+  topBorder?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        padding: "0 12px",
+        height: 30,
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        borderTop: topBorder ? "1px solid var(--border-mid)" : undefined,
+        borderBottom: "1px solid var(--border-dim)",
+        flexShrink: 0,
+      }}
+    >
+      {icon}
+      <span
+        style={{
+          fontSize: 10,
+          fontWeight: 400,
+          color: "var(--text-primary)",
+          letterSpacing: "0.08em",
+          textTransform: "uppercase",
+          flex: 1,
+          fontFamily: "var(--font-ui)",
+        }}
+      >
+        {label}
+      </span>
+      <span
+        style={{
+          fontSize: 10,
+          fontWeight: 500,
+          background: "var(--accent-dim)",
+          color: "var(--accent-text)",
+          padding: "1px 6px",
+          borderRadius: 3,
+          border: "1px solid var(--accent-border)",
+          fontFamily: "var(--font-mono)",
+          lineHeight: 1.5,
+        }}
+      >
+        {count}
+      </span>
     </div>
   );
 }
@@ -303,6 +359,23 @@ function EmptyState() {
         </div>
         Describe a piece of furniture above.
       </div>
+    </div>
+  );
+}
+
+function LibraryEmptyState() {
+  return (
+    <div
+      style={{
+        padding: "20px 16px",
+        textAlign: "center",
+        color: "var(--text-secondary)",
+        fontSize: 11,
+        fontFamily: "var(--font-ui)",
+        lineHeight: 1.5,
+      }}
+    >
+      No saved meshes. Hit <strong style={{ color: "var(--text-primary)" }}>save</strong> on any ready asset.
     </div>
   );
 }

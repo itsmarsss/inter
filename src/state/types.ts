@@ -70,6 +70,18 @@ export type FurnitureAsset = {
 
 export type FurnitureAssetMap = Map<string, FurnitureAsset>;
 
+export type LibraryEntry = {
+  id: string;
+  name: string;
+  prompt: string;
+  primitive: FurnitureAsset["primitive"];
+  localModelPath: string;
+  localThumbPath?: string;
+  realLengthMeters?: number;
+  footprint?: { width: number; depth: number; height: number };
+  savedAt: number;
+};
+
 export type FurnitureInstance = {
   id: string;
   assetId: string;
