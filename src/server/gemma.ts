@@ -27,9 +27,7 @@ function sshExec(cmd: string): Promise<string | null> {
             if (settled) return;
             settled = true;
             clearTimeout(timer);
-            try {
-                conn.end();
-            } catch {}
+            conn.end();
             resolve(value);
         }
 
