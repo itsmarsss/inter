@@ -566,6 +566,7 @@ export default function App({ entering = false }: { entering?: boolean }) {
           onRoomChange={setRoom}
           onInstancesChange={setInstances}
           onShapesChange={setShapes}
+          onWallSegmentsChange={setWallSegments}
           onDoorsChange={setDoors}
           onWindowsChange={setWindows}
         />
@@ -586,6 +587,7 @@ export default function App({ entering = false }: { entering?: boolean }) {
           onRoomChange={() => undefined}
           onInstancesChange={() => undefined}
           onShapesChange={() => undefined}
+          onWallSegmentsChange={() => undefined}
           onDoorsChange={() => undefined}
           onWindowsChange={() => undefined}
           registerBlueprintCapture={registerBlueprintCapture}

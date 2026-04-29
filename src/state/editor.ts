@@ -540,7 +540,47 @@ export function buildFloorPolygon(
     }
   }
 
-  return points;
+  return orthogonalizeFloorPolygon(points);
+}
+
+function orthogonalizeFloorPolygon(points: FloorPoint[]): FloorPoint[] {
+  if (points.length < 2) return points;
+
+  const EPS = 1e-4;
+  const output: FloorPoint[] = [];
+  const pushPoint = (point: FloorPoint) => {
+    const last = output[output.length - 1];
+    if (last && Math.abs(last.x - point.x) < EPS && Math.abs(last.z - point.z) < EPS) return;
+    output.push(point);
+  };
+
+  const isHorizontal = (a: FloorPoint, b: FloorPoint) => Math.abs(a.z - b.z) < EPS;
+  const isVertical = (a: FloorPoint, b: FloorPoint) => Math.abs(a.x - b.x) < EPS;
+
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index];
+    const next = points[(index + 1) % points.length];
+    pushPoint(current);
+
+    if (isHorizontal(current, next) || isVertical(current, next)) continue;
+
+    const previous = points[(index - 1 + points.length) % points.length];
+    const enteringHorizontally = isHorizontal(previous, current);
+    const corner = enteringHorizontally
+      ? { x: next.x, z: current.z }
+      : { x: current.x, z: next.z };
+    pushPoint(corner);
+  }
+
+  if (output.length > 1) {
+    const first = output[0];
+    const last = output[output.length - 1];
+    if (Math.abs(first.x - last.x) < EPS && Math.abs(first.z - last.z) < EPS) {
+      output.pop();
+    }
+  }
+
+  return output;
 }
 
 function inferPrimitive(prompt: string): FurnitureAsset["primitive"] {

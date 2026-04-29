@@ -2452,11 +2452,23 @@ function SegmentedWall({
       {segments.map((segment) => {
         const endpoints = segmentWorldEndpoints(room, wallSegments, wall, segment);
         const segmentLength = endpoints.length;
-        if (segmentLength < 0.02) return null;
+        const rawStart = isHorizontal
+          ? room.minX + segment.start * wallLength
+          : room.minZ + segment.start * wallLength;
+        const rawEnd = isHorizontal
+          ? room.minX + segment.end * wallLength
+          : room.minZ + segment.end * wallLength;
+        const rawLength = Math.max(0, rawEnd - rawStart);
+        if (segmentLength < 0.02 && rawLength < 0.02) return null;
         const perp = sign * segment.displacement;
+        const visibleCenter = (endpoints.start + endpoints.end) / 2;
+        const hitCenter = (rawStart + rawEnd) / 2;
         const position: Vec3 = isHorizontal
-          ? [(endpoints.start + endpoints.end) / 2, room.height / 2, center[2] + perp]
-          : [center[0] + perp, room.height / 2, (endpoints.start + endpoints.end) / 2];
+          ? [visibleCenter, room.height / 2, center[2] + perp]
+          : [center[0] + perp, room.height / 2, visibleCenter];
+        const hitOffset: Vec3 = isHorizontal
+          ? [hitCenter - visibleCenter, 0, 0]
+          : [0, 0, hitCenter - visibleCenter];
         const segmentSelected =
           editable && selected?.type === "wall-segment" && selected.id === segment.id;
         const segmentHovered =
@@ -2467,6 +2479,8 @@ function SegmentedWall({
             key={segment.id}
             wall={wall}
             length={segmentLength}
+            hitLength={rawLength}
+            hitOffset={hitOffset}
             height={room.height}
             position={position}
             opacity={opacity}
@@ -2516,58 +2530,6 @@ function SegmentedWall({
           />
         );
       })}
-      {(() => {
-        const first = segments[0];
-        if (!first || first.displacement >= -0.001) return null;
-        const startAlong = -wallLength / 2;
-        const midDisp = first.displacement / 2;
-        const perp = sign * midDisp;
-        const position: Vec3 = isHorizontal
-          ? [(room.minX + room.maxX) / 2 + startAlong, room.height / 2, center[2] + perp]
-          : [center[0] + perp, room.height / 2, (room.minZ + room.maxZ) / 2 + startAlong];
-        return (
-          <ConnectorMesh
-            key={`${wall}-start-connector`}
-            wall={wall}
-            depth={Math.abs(first.displacement)}
-            height={room.height}
-            position={position}
-            opacity={opacity}
-            highlight={wallSelected || wallHovered}
-            onPointerDown={
-              editable
-                ? (event) => onConnectorPointerDown({ wall, segmentId: first.id, side: "start" }, event)
-                : undefined
-            }
-          />
-        );
-      })()}
-      {(() => {
-        const last = segments[segments.length - 1];
-        if (!last || last.displacement >= -0.001) return null;
-        const endAlong = wallLength / 2;
-        const midDisp = last.displacement / 2;
-        const perp = sign * midDisp;
-        const position: Vec3 = isHorizontal
-          ? [(room.minX + room.maxX) / 2 + endAlong, room.height / 2, center[2] + perp]
-          : [center[0] + perp, room.height / 2, (room.minZ + room.maxZ) / 2 + endAlong];
-        return (
-          <ConnectorMesh
-            key={`${wall}-end-connector`}
-            wall={wall}
-            depth={Math.abs(last.displacement)}
-            height={room.height}
-            position={position}
-            opacity={opacity}
-            highlight={wallSelected || wallHovered}
-            onPointerDown={
-              editable
-                ? (event) => onConnectorPointerDown({ wall, segmentId: last.id, side: "end" }, event)
-                : undefined
-            }
-          />
-        );
-      })()}
     </group>
   );
 }
@@ -4612,6 +4574,8 @@ const WALL_HIT_PAD = 0.1;
 type SegmentMeshProps = {
   wall: WallId;
   length: number;
+  hitLength: number;
+  hitOffset: Vec3;
   height: number;
   position: Vec3;
   opacity: number;
@@ -4626,6 +4590,8 @@ type SegmentMeshProps = {
 function SegmentMesh({
   wall,
   length,
+  hitLength,
+  hitOffset,
   height,
   position,
   opacity,
@@ -4642,8 +4608,8 @@ function SegmentMesh({
     : [WALL_THICKNESS, height, length];
   const outlineSize: Vec3 = [visibleSize[0] + 0.012, visibleSize[1] + 0.012, visibleSize[2] + 0.012];
   const hitSize: Vec3 = isHorizontal
-    ? [length + 0.36, height, WALL_HIT_PAD]
-    : [WALL_HIT_PAD, height, length + 0.36];
+    ? [hitLength + 0.36, height, WALL_HIT_PAD]
+    : [WALL_HIT_PAD, height, hitLength + 0.36];
   const highlighted = selected || hovered;
 
   return (
@@ -4652,30 +4618,34 @@ function SegmentMesh({
       onPointerOver={onPointerOver}
       onPointerOut={onPointerOut}
     >
-      <mesh castShadow receiveShadow onPointerDown={onPointerDown} renderOrder={0} userData={{ captureRole: "wall" }}>
-        <boxGeometry args={visibleSize} />
-        <meshStandardMaterial
-          color={selected ? SCENE_COLORS.wallSelected : SCENE_COLORS.wall}
-          transparent
-          opacity={(selected ? 0.92 : hovered ? 0.84 : 0.74) * opacity}
-          roughness={0.62}
-          emissive={highlighted ? SCENE_COLORS.wallSelected : SCENE_COLORS.wall}
-          emissiveIntensity={selected ? 0.2 : hovered ? 0.1 : 0.05}
-          depthWrite={opacity >= 0.98}
-        />
-      </mesh>
-      <mesh>
-        <boxGeometry args={outlineSize} />
-        <meshBasicMaterial
-          userData={{ captureHidden: true }}
-          color={highlighted ? SCENE_COLORS.wallSelectedEdge : SCENE_COLORS.wallEdge}
-          wireframe
-          transparent
-          opacity={(selected ? 0.65 : hovered ? 0.5 : 0.34) * opacity}
-          depthWrite={false}
-        />
-      </mesh>
-      <mesh onPointerDown={onPointerDown}>
+      {length >= 0.02 ? (
+        <>
+          <mesh castShadow receiveShadow onPointerDown={onPointerDown} renderOrder={0} userData={{ captureRole: "wall" }}>
+            <boxGeometry args={visibleSize} />
+            <meshStandardMaterial
+              color={selected ? SCENE_COLORS.wallSelected : SCENE_COLORS.wall}
+              transparent
+              opacity={(selected ? 0.92 : hovered ? 0.84 : 0.74) * opacity}
+              roughness={0.62}
+              emissive={highlighted ? SCENE_COLORS.wallSelected : SCENE_COLORS.wall}
+              emissiveIntensity={selected ? 0.2 : hovered ? 0.1 : 0.05}
+              depthWrite={opacity >= 0.98}
+            />
+          </mesh>
+          <mesh>
+            <boxGeometry args={outlineSize} />
+            <meshBasicMaterial
+              userData={{ captureHidden: true }}
+              color={highlighted ? SCENE_COLORS.wallSelectedEdge : SCENE_COLORS.wallEdge}
+              wireframe
+              transparent
+              opacity={(selected ? 0.65 : hovered ? 0.5 : 0.34) * opacity}
+              depthWrite={false}
+            />
+          </mesh>
+        </>
+      ) : null}
+      <mesh position={hitOffset} onPointerDown={onPointerDown}>
         <boxGeometry args={hitSize} />
         <meshBasicMaterial
           userData={{ captureHidden: true, cursorHighlight: highlightCursor }}
