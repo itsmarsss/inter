@@ -10,6 +10,7 @@ import type {
   SelectedRef,
   ToolMode,
   Vec3,
+  WallConnectorRef,
   WallId,
   WallSegment,
   WallSegmentation,
@@ -976,6 +977,28 @@ function openingSegment(
   room: RoomBounds,
   segments?: WallSegment[],
 ) {
+  if (opening.connector && segments) {
+    const connector = connectorLineForRef(opening.connector, room, segments);
+    if (connector) {
+      const half = opening.width / 2;
+      const dx = connector.x2 - connector.x1;
+      const dy = connector.y2 - connector.y1;
+      const length = Math.hypot(dx, dy);
+      if (length > 1e-4) {
+        const ux = dx / length;
+        const uy = dy / length;
+        const midX = (connector.x1 + connector.x2) / 2 + ux * opening.offset;
+        const midY = (connector.y1 + connector.y2) / 2 + uy * opening.offset;
+        return {
+          x1: midX - ux * half,
+          y1: midY - uy * half,
+          x2: midX + ux * half,
+          y2: midY + uy * half,
+        };
+      }
+    }
+  }
+
   const cx = (room.minX + room.maxX) / 2;
   const cz = (room.minZ + room.maxZ) / 2;
   const half = opening.width / 2;
@@ -992,7 +1015,13 @@ function doorArcPath(door: Door, room: RoomBounds, seg: { x1: number; y1: number
   const radius = door.width;
   let normalX = 0;
   let normalY = 0;
-  if (door.wall === "north") normalY = -1;
+  if (door.connector) {
+    const dx = seg.x2 - seg.x1;
+    const dy = seg.y2 - seg.y1;
+    const length = Math.hypot(dx, dy) || 1;
+    normalX = -dy / length;
+    normalY = dx / length;
+  } else if (door.wall === "north") normalY = -1;
   else if (door.wall === "south") normalY = 1;
   else if (door.wall === "east") normalX = -1;
   else normalX = 1;
@@ -1003,6 +1032,24 @@ function doorArcPath(door: Door, room: RoomBounds, seg: { x1: number; y1: number
   void room;
   const sweep = 1;
   return `M ${hingeX} ${hingeY} L ${seg.x2} ${seg.y2} M ${seg.x2} ${seg.y2} A ${radius} ${radius} 0 0 ${sweep} ${arcEndX} ${arcEndY}`;
+}
+
+function connectorLineForRef(
+  connector: WallConnectorRef,
+  room: RoomBounds,
+  segments: WallSegment[],
+): { x1: number; y1: number; x2: number; y2: number } | null {
+  const index = segments.findIndex((segment) => segment.id === connector.segmentId);
+  if (index === -1) return null;
+  const segment = segments[index];
+  if (connector.side === "start") {
+    const previous = segments[index - 1];
+    if (previous) return connectorLineCoords(connector.wall, previous, segment, room);
+    return endConnectorLineCoords(connector.wall, segment, "start", room);
+  }
+  const next = segments[index + 1];
+  if (next) return connectorLineCoords(connector.wall, segment, next, room);
+  return endConnectorLineCoords(connector.wall, segment, "end", room);
 }
 
 function wallSurfaceSign(wall: WallId): number {
