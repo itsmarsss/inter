@@ -1045,10 +1045,12 @@ function connectorLineForRef(
   if (connector.side === "start") {
     const previous = segments[index - 1];
     if (previous) return connectorLineCoords(connector.wall, previous, segment, room);
+    if (segment.displacement >= -0.001) return null;
     return endConnectorLineCoords(connector.wall, segment, "start", room);
   }
   const next = segments[index + 1];
   if (next) return connectorLineCoords(connector.wall, segment, next, room);
+  if (segment.displacement >= -0.001) return null;
   return endConnectorLineCoords(connector.wall, segment, "end", room);
 }
 
@@ -1061,23 +1063,24 @@ function segmentLineCoords(
   wall: WallId,
   segment: WallSegment,
   room: RoomBounds,
+  wallSegments?: WallSegmentation,
 ): { x1: number; y1: number; x2: number; y2: number } {
   const sign = wallSurfaceSign(wall);
   if (wall === "north") {
     const baseZ = room.maxZ + sign * segment.displacement;
     return {
-      x1: room.minX + segment.start * (room.maxX - room.minX),
+      x1: segment.start <= 0.001 ? room.minX + (wallSegments?.west[(wallSegments?.west.length ?? 1) - 1]?.displacement ?? 0) : room.minX + segment.start * (room.maxX - room.minX),
       y1: baseZ,
-      x2: room.minX + segment.end * (room.maxX - room.minX),
+      x2: segment.end >= 0.999 ? room.maxX - (wallSegments?.east[(wallSegments?.east.length ?? 1) - 1]?.displacement ?? 0) : room.minX + segment.end * (room.maxX - room.minX),
       y2: baseZ,
     };
   }
   if (wall === "south") {
     const baseZ = room.minZ + sign * segment.displacement;
     return {
-      x1: room.minX + segment.start * (room.maxX - room.minX),
+      x1: segment.start <= 0.001 ? room.minX + (wallSegments?.west[0]?.displacement ?? 0) : room.minX + segment.start * (room.maxX - room.minX),
       y1: baseZ,
-      x2: room.minX + segment.end * (room.maxX - room.minX),
+      x2: segment.end >= 0.999 ? room.maxX - (wallSegments?.east[0]?.displacement ?? 0) : room.minX + segment.end * (room.maxX - room.minX),
       y2: baseZ,
     };
   }
@@ -1085,17 +1088,17 @@ function segmentLineCoords(
     const baseX = room.maxX + sign * segment.displacement;
     return {
       x1: baseX,
-      y1: room.minZ + segment.start * (room.maxZ - room.minZ),
+      y1: segment.start <= 0.001 ? room.minZ + (wallSegments?.south[(wallSegments?.south.length ?? 1) - 1]?.displacement ?? 0) : room.minZ + segment.start * (room.maxZ - room.minZ),
       x2: baseX,
-      y2: room.minZ + segment.end * (room.maxZ - room.minZ),
+      y2: segment.end >= 0.999 ? room.maxZ - (wallSegments?.north[(wallSegments?.north.length ?? 1) - 1]?.displacement ?? 0) : room.minZ + segment.end * (room.maxZ - room.minZ),
     };
   }
   const baseX = room.minX + sign * segment.displacement;
   return {
     x1: baseX,
-    y1: room.minZ + segment.start * (room.maxZ - room.minZ),
+    y1: segment.start <= 0.001 ? room.minZ + (wallSegments?.south[0]?.displacement ?? 0) : room.minZ + segment.start * (room.maxZ - room.minZ),
     x2: baseX,
-    y2: room.minZ + segment.end * (room.maxZ - room.minZ),
+    y2: segment.end >= 0.999 ? room.maxZ - (wallSegments?.north[0]?.displacement ?? 0) : room.minZ + segment.end * (room.maxZ - room.minZ),
   };
 }
 
@@ -1147,7 +1150,7 @@ function BlueprintWallSegments({
           <g key={wall}>
             {segments.map((segment) => {
               const isSelected = selected?.type === "wall-segment" && selected.id === segment.id;
-              const coords = segmentLineCoords(wall, segment, room);
+              const coords = segmentLineCoords(wall, segment, room, wallSegments);
               return (
                 <line
                   key={segment.id}
@@ -1186,7 +1189,7 @@ function BlueprintWallSegments({
             })}
             {(() => {
               const first = segments[0];
-              if (!first || Math.abs(first.displacement) < 0.001) return null;
+              if (!first || first.displacement >= -0.001) return null;
               const coords = endConnectorLineCoords(wall, first, "start", room);
               return (
                 <line
@@ -1203,7 +1206,7 @@ function BlueprintWallSegments({
             })()}
             {(() => {
               const last = segments[segments.length - 1];
-              if (!last || Math.abs(last.displacement) < 0.001) return null;
+              if (!last || last.displacement >= -0.001) return null;
               const coords = endConnectorLineCoords(wall, last, "end", room);
               return (
                 <line

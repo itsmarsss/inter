@@ -2390,6 +2390,7 @@ function BlockoutReferenceLayer({
           wall={wall}
           room={room}
           segments={wallSegments[wall]}
+          wallSegments={wallSegments}
           selected={selected}
           hovered={hovered}
           editable={editable}
@@ -2410,6 +2411,7 @@ type SegmentedWallProps = {
   wall: WallId;
   room: RoomBounds;
   segments: WallSegment[];
+  wallSegments: WallSegmentation;
   selected: SelectedRef;
   hovered: SelectedRef;
   editable: boolean;
@@ -2426,6 +2428,7 @@ function SegmentedWall({
   wall,
   room,
   segments,
+  wallSegments,
   selected,
   hovered,
   editable,
@@ -2447,12 +2450,13 @@ function SegmentedWall({
   return (
     <group>
       {segments.map((segment) => {
-        const segmentLength = (segment.end - segment.start) * wallLength;
-        const alongOffset = ((segment.start + segment.end) / 2 - 0.5) * wallLength;
+        const endpoints = segmentWorldEndpoints(room, wallSegments, wall, segment);
+        const segmentLength = endpoints.length;
+        if (segmentLength < 0.02) return null;
         const perp = sign * segment.displacement;
         const position: Vec3 = isHorizontal
-          ? [(room.minX + room.maxX) / 2 + alongOffset, room.height / 2, center[2] + perp]
-          : [center[0] + perp, room.height / 2, (room.minZ + room.maxZ) / 2 + alongOffset];
+          ? [(endpoints.start + endpoints.end) / 2, room.height / 2, center[2] + perp]
+          : [center[0] + perp, room.height / 2, (endpoints.start + endpoints.end) / 2];
         const segmentSelected =
           editable && selected?.type === "wall-segment" && selected.id === segment.id;
         const segmentHovered =
@@ -2514,7 +2518,7 @@ function SegmentedWall({
       })}
       {(() => {
         const first = segments[0];
-        if (!first || Math.abs(first.displacement) < 0.001) return null;
+        if (!first || first.displacement >= -0.001) return null;
         const startAlong = -wallLength / 2;
         const midDisp = first.displacement / 2;
         const perp = sign * midDisp;
@@ -2540,7 +2544,7 @@ function SegmentedWall({
       })()}
       {(() => {
         const last = segments[segments.length - 1];
-        if (!last || Math.abs(last.displacement) < 0.001) return null;
+        if (!last || last.displacement >= -0.001) return null;
         const endAlong = wallLength / 2;
         const midDisp = last.displacement / 2;
         const perp = sign * midDisp;
@@ -2571,6 +2575,75 @@ function SegmentedWall({
 function wallSurfaceSign(wall: WallId): number {
   if (wall === "north" || wall === "east") return -1;
   return 1;
+}
+
+function segmentWorldEndpoints(
+  room: RoomBounds,
+  segmentation: WallSegmentation,
+  wall: WallId,
+  segment: WallSegment,
+) {
+  const width = room.maxX - room.minX;
+  const depth = room.maxZ - room.minZ;
+
+  if (wall === "north") {
+    return {
+      start: segment.start <= 0.001 ? room.minX + westNorthDisplacement(segmentation) : room.minX + segment.start * width,
+      end: segment.end >= 0.999 ? room.maxX - eastNorthDisplacement(segmentation) : room.minX + segment.end * width,
+      length: Math.max(0, (segment.end >= 0.999 ? room.maxX - eastNorthDisplacement(segmentation) : room.minX + segment.end * width) - (segment.start <= 0.001 ? room.minX + westNorthDisplacement(segmentation) : room.minX + segment.start * width)),
+    };
+  }
+  if (wall === "south") {
+    return {
+      start: segment.start <= 0.001 ? room.minX + westSouthDisplacement(segmentation) : room.minX + segment.start * width,
+      end: segment.end >= 0.999 ? room.maxX - eastSouthDisplacement(segmentation) : room.minX + segment.end * width,
+      length: Math.max(0, (segment.end >= 0.999 ? room.maxX - eastSouthDisplacement(segmentation) : room.minX + segment.end * width) - (segment.start <= 0.001 ? room.minX + westSouthDisplacement(segmentation) : room.minX + segment.start * width)),
+    };
+  }
+  if (wall === "east") {
+    return {
+      start: segment.start <= 0.001 ? room.minZ + southEastDisplacement(segmentation) : room.minZ + segment.start * depth,
+      end: segment.end >= 0.999 ? room.maxZ - northEastDisplacement(segmentation) : room.minZ + segment.end * depth,
+      length: Math.max(0, (segment.end >= 0.999 ? room.maxZ - northEastDisplacement(segmentation) : room.minZ + segment.end * depth) - (segment.start <= 0.001 ? room.minZ + southEastDisplacement(segmentation) : room.minZ + segment.start * depth)),
+    };
+  }
+  return {
+    start: segment.start <= 0.001 ? room.minZ + southWestDisplacement(segmentation) : room.minZ + segment.start * depth,
+    end: segment.end >= 0.999 ? room.maxZ - northWestDisplacement(segmentation) : room.minZ + segment.end * depth,
+    length: Math.max(0, (segment.end >= 0.999 ? room.maxZ - northWestDisplacement(segmentation) : room.minZ + segment.end * depth) - (segment.start <= 0.001 ? room.minZ + southWestDisplacement(segmentation) : room.minZ + segment.start * depth)),
+  };
+}
+
+function northWestDisplacement(segmentation: WallSegmentation) {
+  return segmentation.north[0]?.displacement ?? 0;
+}
+
+function northEastDisplacement(segmentation: WallSegmentation) {
+  return segmentation.north[segmentation.north.length - 1]?.displacement ?? 0;
+}
+
+function southWestDisplacement(segmentation: WallSegmentation) {
+  return segmentation.south[0]?.displacement ?? 0;
+}
+
+function southEastDisplacement(segmentation: WallSegmentation) {
+  return segmentation.south[segmentation.south.length - 1]?.displacement ?? 0;
+}
+
+function westSouthDisplacement(segmentation: WallSegmentation) {
+  return segmentation.west[0]?.displacement ?? 0;
+}
+
+function westNorthDisplacement(segmentation: WallSegmentation) {
+  return segmentation.west[segmentation.west.length - 1]?.displacement ?? 0;
+}
+
+function eastSouthDisplacement(segmentation: WallSegmentation) {
+  return segmentation.east[0]?.displacement ?? 0;
+}
+
+function eastNorthDisplacement(segmentation: WallSegmentation) {
+  return segmentation.east[segmentation.east.length - 1]?.displacement ?? 0;
 }
 
 function RoomDimensionBadge({
@@ -4164,6 +4237,7 @@ function connectorDescriptor(
 
   const segment = segments[index];
   const neighbor = ref.side === "start" ? segments[index - 1] : segments[index + 1];
+  if (!neighbor && segment.displacement >= -0.001) return null;
   const fromDisplacement = ref.side === "start"
     ? neighbor?.displacement ?? 0
     : segment.displacement;
@@ -4626,9 +4700,10 @@ type ConnectorMeshProps = {
 
 function ConnectorMesh({ wall, depth, height, position, opacity, highlight, onPointerDown }: ConnectorMeshProps) {
   const isHorizontal = wall === "north" || wall === "south";
+  const visibleDepth = Math.max(0.02, depth - WALL_THICKNESS);
   const visibleSize: Vec3 = isHorizontal
-    ? [WALL_THICKNESS, height, depth]
-    : [depth, height, WALL_THICKNESS];
+    ? [WALL_THICKNESS, height, visibleDepth]
+    : [visibleDepth, height, WALL_THICKNESS];
   const outlineSize: Vec3 = [visibleSize[0] + 0.012, visibleSize[1] + 0.012, visibleSize[2] + 0.012];
   const hitSize: Vec3 = isHorizontal
     ? [WALL_HIT_PAD, height, Math.max(depth, MIN_CONNECTOR_OPENING_LENGTH)]
