@@ -7,6 +7,7 @@ import {
   openFurnitureMeshyStream,
   startFurnitureMeshyTask,
 } from "./api/meshy";
+import { generateRoomWithMarble, pollMarbleOperation } from "./api/marble";
 import { estimateModelLength } from "./api/dimension";
 import {
   deleteAssetFromLibrary,
@@ -20,6 +21,7 @@ import { BlueprintView } from "./components/BlueprintView";
 import type { ViewMode } from "./components/ModeBar";
 import {
   buildFurnitureAssetMap,
+  clampOpeningsToLayout,
   clampToFloor,
   createDefaultWallSegmentation,
   createDoor,
@@ -61,8 +63,15 @@ export default function App({ entering = false }: { entering?: boolean }) {
 
       if (event.key === "Delete" || event.key === "Backspace") {
         setState((current) => {
-          if (current.selected?.type !== "furniture") return current;
+          if (current.selected?.type !== "furniture" && current.selected?.type !== "shape") return current;
           const id = current.selected.id;
+          if (current.selected.type === "shape") {
+            return {
+              ...current,
+              customShapes: current.customShapes.filter((shape) => shape.id !== id),
+              selected: null,
+            };
+          }
           return {
             ...current,
             furnitureInstances: current.furnitureInstances.filter((i) => i.id !== id),
@@ -208,90 +217,133 @@ export default function App({ entering = false }: { entering?: boolean }) {
   // Auto-switch to splat view when a new world finishes generating, and back to Block if it's gone.
   const splatUrl = state.marble.status === "complete" ? state.marble.spzUrl : undefined;
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setViewMode(splatUrl ? "Splat" : "Block");
   }, [splatUrl]);
 
   async function handleGenerateFinalRoom() {
     const runId = generationRunRef.current + 1;
     generationRunRef.current = runId;
-
-    const totalDurationMs = 25_000;
     const startedAt = performance.now();
+    const sceneCapture = sceneCaptureRef.current?.();
+    const blueprintCapture = blueprintCaptureRef.current?.();
+    const captures: CaptureImage[] = [
+      ...(sceneCapture ? [sceneCapture] : []),
+      ...(blueprintCapture
+        ? [
+            {
+              role: "blueprint" as const,
+              dataUrl: blueprintCapture,
+              isPano: false,
+            },
+          ]
+        : []),
+    ];
 
     setState((current) => ({
       ...current,
-      marble: { status: "uploading", progress: 0, etaMs: totalDurationMs },
+      marble: { status: "uploading", progress: 0.02 },
     }));
 
-    // Tiny "uploading" beat so the UI doesn't snap straight to generating
-    await sleep(450);
-    if (generationRunRef.current !== runId) return;
-
-    setState((current) => ({
-      ...current,
-      marble: { status: "generating", progress: 0.02, etaMs: totalDurationMs - 450 },
-    }));
-
-    // Drive a non-linear progress curve — small ticks, occasional long stalls,
-    // and short "burst" jumps. Caps just shy of 100% so the final tick is the
-    // moment the splat URL becomes available.
-    let progress = 0.02;
-    let nextStallUntil = 0;
-    while (true) {
-      const elapsed = performance.now() - startedAt;
-      const elapsedFraction = Math.min(1, elapsed / totalDurationMs);
-
-      // A "smooth target" we're chasing — still nonlinear (cubic ease-out) so
-      // the bar feels lively early and slow late.
-      const smoothTarget = 1 - Math.pow(1 - elapsedFraction, 3);
-
-      // Sometimes stall for a chunk of time to imitate a real loader. Pick a
-      // new stall window every couple of seconds when one isn't already armed.
-      if (performance.now() > nextStallUntil && Math.random() < 0.18 && progress < 0.92) {
-        nextStallUntil = performance.now() + 600 + Math.random() * 1800;
-      }
-
-      const stalled = performance.now() < nextStallUntil;
-
-      if (!stalled) {
-        // Normal step: chase the smooth target, occasionally jump ahead.
-        const gap = Math.max(0, smoothTarget - progress);
-        const jitter = (Math.random() - 0.35) * 0.012;
-        let step = gap * 0.18 + Math.max(0, jitter);
-        if (Math.random() < 0.06) step += 0.04 + Math.random() * 0.06; // burst
-        progress = Math.min(0.985, progress + step);
-      } else {
-        // Tiny dribble during stalls so the bar isn't perfectly frozen.
-        progress = Math.min(0.97, progress + 0.0008);
-      }
-
-      const etaMs = Math.max(0, totalDurationMs - elapsed);
-      const snapshot = progress;
-      setState((current) => {
-        if (current.marble.status !== "generating") return current;
-        return {
-          ...current,
-          marble: { ...current.marble, progress: snapshot, etaMs },
-        };
+    try {
+      const started = await generateRoomWithMarble({
+        room: state.room,
+        instances: state.furnitureInstances,
+        assets: state.furnitureAssets,
+        assetById,
+        shapes: state.customShapes,
+        projectTitle: state.projectTitle,
+        visibility: state.visibility,
+        workflowStep: "world",
+        templateId: state.selectedTemplateId,
+        panoramaOpacity: state.panoramaOpacity,
+        stylePrompt: state.stylePrompt,
+        captures,
       });
-
-      if (elapsed >= totalDurationMs) break;
-      await sleep(120 + Math.random() * 180);
       if (generationRunRef.current !== runId) return;
+
+      if (started.status === "failed" || started.status === "complete") {
+        setState((current) => ({
+          ...current,
+          marble: {
+            ...started,
+            progress: started.status === "complete" ? 1 : started.progress,
+            etaMs: started.status === "complete" ? 0 : started.etaMs,
+          },
+        }));
+        return;
+      }
+
+      if (!started.operationId) {
+        setState((current) => ({
+          ...current,
+          marble: {
+            ...started,
+            status: "failed",
+            error: "Marble did not return an operation id.",
+          },
+        }));
+        return;
+      }
+
+      setState((current) => ({
+        ...current,
+        marble: {
+          ...started,
+          status: "generating",
+          progress: Math.max(started.progress ?? 0, 0.08),
+        },
+      }));
+
+      let pollCount = 0;
+      while (generationRunRef.current === runId) {
+        await sleep(MARBLE_POLL_INTERVAL_MS);
+        if (generationRunRef.current !== runId) return;
+
+        const result = await pollMarbleOperation(started.operationId);
+        if (generationRunRef.current !== runId) return;
+
+        if (result.status === "complete" || result.status === "failed") {
+          setState((current) => ({
+            ...current,
+            marble: {
+              ...result,
+              payload: result.payload ?? started.payload,
+              progress: result.status === "complete" ? 1 : result.progress,
+              etaMs: result.status === "complete" ? 0 : result.etaMs,
+            },
+          }));
+          return;
+        }
+
+        pollCount += 1;
+        const elapsedMs = performance.now() - startedAt;
+        const fallbackProgress = Math.min(0.95, 0.08 + 0.78 * (1 - Math.exp(-pollCount / 12)));
+        const etaMs = Math.max(0, 90_000 - elapsedMs);
+        setState((current) => {
+          if (current.marble.status !== "generating") return current;
+          return {
+            ...current,
+            marble: {
+              ...current.marble,
+              ...result,
+              payload: result.payload ?? started.payload,
+              progress: Math.max(current.marble.progress ?? 0, result.progress ?? fallbackProgress),
+              etaMs: result.etaMs ?? etaMs,
+            },
+          };
+        });
+      }
+    } catch (error) {
+      if (generationRunRef.current !== runId) return;
+      setState((current) => ({
+        ...current,
+        marble: {
+          ...current.marble,
+          status: "failed",
+          error: error instanceof Error ? error.message : "Marble generation failed.",
+        },
+      }));
     }
-
-    if (generationRunRef.current !== runId) return;
-
-    setState((current) => ({
-      ...current,
-      marble: {
-        status: "complete",
-        progress: 1,
-        etaMs: 0,
-        spzUrl: LOCAL_SPLAT_URL,
-      },
-    }));
   }
 
   function handleCancelRun() {
@@ -370,18 +422,23 @@ export default function App({ entering = false }: { entering?: boolean }) {
   }
 
   const setRoom: React.ComponentProps<typeof SceneView>["onRoomChange"] = (room) =>
-    setState((current) => ({
-      ...current,
-      room,
-      furnitureInstances: current.furnitureInstances.map((instance) => ({
-        ...instance,
-        position: clampToFloor(instance.position, room, current.wallSegments),
-      })),
-      customShapes: current.customShapes.map((shape) => ({
-        ...shape,
-        position: clampToFloor(shape.position, room, current.wallSegments),
-      })),
-    }));
+    setState((current) => {
+      const openings = clampOpeningsToLayout(room, current.wallSegments, current.doors, current.windows);
+      return {
+        ...current,
+        room,
+        doors: openings.doors,
+        windows: openings.windows,
+        furnitureInstances: current.furnitureInstances.map((instance) => ({
+          ...instance,
+          position: clampToFloor(instance.position, room, current.wallSegments),
+        })),
+        customShapes: current.customShapes.map((shape) => ({
+          ...shape,
+          position: clampToFloor(shape.position, room, current.wallSegments),
+        })),
+      };
+    });
   const setInstances: React.ComponentProps<typeof SceneView>["onInstancesChange"] = (furnitureInstances) =>
     setState((current) => ({ ...current, furnitureInstances }));
   const setShapes: React.ComponentProps<typeof SceneView>["onShapesChange"] = (customShapes) =>
@@ -393,18 +450,23 @@ export default function App({ entering = false }: { entering?: boolean }) {
   const setWindows: React.ComponentProps<typeof SceneView>["onWindowsChange"] = (windows) =>
     setState((current) => ({ ...current, windows }));
   const setWallSegments: React.ComponentProps<typeof SceneView>["onWallSegmentsChange"] = (wallSegments) =>
-    setState((current) => ({
-      ...current,
-      wallSegments,
-      furnitureInstances: current.furnitureInstances.map((instance) => ({
-        ...instance,
-        position: clampToFloor(instance.position, current.room, wallSegments),
-      })),
-      customShapes: current.customShapes.map((shape) => ({
-        ...shape,
-        position: clampToFloor(shape.position, current.room, wallSegments),
-      })),
-    }));
+    setState((current) => {
+      const openings = clampOpeningsToLayout(current.room, wallSegments, current.doors, current.windows);
+      return {
+        ...current,
+        wallSegments,
+        doors: openings.doors,
+        windows: openings.windows,
+        furnitureInstances: current.furnitureInstances.map((instance) => ({
+          ...instance,
+          position: clampToFloor(instance.position, current.room, wallSegments),
+        })),
+        customShapes: current.customShapes.map((shape) => ({
+          ...shape,
+          position: clampToFloor(shape.position, current.room, wallSegments),
+        })),
+      };
+    });
   const setSelected: React.ComponentProps<typeof SceneView>["onSelect"] = (selected) =>
     setState((current) => ({ ...current, selected }));
   const setTool: React.ComponentProps<typeof SceneView>["onToolChange"] = (tool) =>
@@ -454,23 +516,46 @@ export default function App({ entering = false }: { entering?: boolean }) {
     }));
   }
 
-  function handleRemoveWallSegment(wall: Parameters<typeof removeWallSegment>[1], id: string) {
+  function handleRemoveShape(id: string) {
     setState((current) => ({
       ...current,
-      wallSegments: removeWallSegment(current.wallSegments, wall, id),
+      customShapes: current.customShapes.filter((shape) => shape.id !== id),
       selected:
-        current.selected?.type === "wall-segment" && current.selected.id === id
+        current.selected?.type === "shape" && current.selected.id === id
           ? null
           : current.selected,
     }));
   }
 
+  function handleRemoveWallSegment(wall: Parameters<typeof removeWallSegment>[1], id: string) {
+    setState((current) => {
+      const wallSegments = removeWallSegment(current.wallSegments, wall, id);
+      const openings = clampOpeningsToLayout(current.room, wallSegments, current.doors, current.windows);
+      return {
+        ...current,
+        wallSegments,
+        doors: openings.doors,
+        windows: openings.windows,
+        selected:
+          current.selected?.type === "wall-segment" && current.selected.id === id
+            ? null
+            : current.selected,
+      };
+    });
+  }
+
   function handleResetWallSegments() {
-    setState((current) => ({
-      ...current,
-      wallSegments: createDefaultWallSegmentation(),
-      selected: current.selected?.type === "wall-segment" ? null : current.selected,
-    }));
+    setState((current) => {
+      const wallSegments = createDefaultWallSegmentation();
+      const openings = clampOpeningsToLayout(current.room, wallSegments, current.doors, current.windows);
+      return {
+        ...current,
+        wallSegments,
+        doors: openings.doors,
+        windows: openings.windows,
+        selected: current.selected?.type === "wall-segment" ? null : current.selected,
+      };
+    });
   }
 
   return (
@@ -522,6 +607,7 @@ export default function App({ entering = false }: { entering?: boolean }) {
           onRoomChange={setRoom}
           onInstancesChange={setInstances}
           onShapesChange={setShapes}
+          onWallSegmentsChange={setWallSegments}
           onDoorsChange={setDoors}
           onWindowsChange={setWindows}
         />
@@ -542,6 +628,7 @@ export default function App({ entering = false }: { entering?: boolean }) {
           onRoomChange={() => undefined}
           onInstancesChange={() => undefined}
           onShapesChange={() => undefined}
+          onWallSegmentsChange={() => undefined}
           onDoorsChange={() => undefined}
           onWindowsChange={() => undefined}
           registerBlueprintCapture={registerBlueprintCapture}
@@ -574,6 +661,7 @@ export default function App({ entering = false }: { entering?: boolean }) {
       onRemoveWindow={handleRemoveWindow}
       onRemoveFurnitureInstance={handleRemoveFurnitureInstance}
       onRotateFurnitureInstance={handleRotateFurnitureInstance}
+      onRemoveShape={handleRemoveShape}
       onRemoveWallSegment={handleRemoveWallSegment}
       onResetWallSegments={handleResetWallSegments}
       onGenerateFurniture={handleGenerateFurniture}
@@ -592,11 +680,7 @@ export default function App({ entering = false }: { entering?: boolean }) {
   );
 }
 
-/**
- * Pre-baked splat we render in place of the (now disabled) WorldLabs Marble
- * generation pipeline. Served by Next.js as a static asset out of `public/`.
- */
-const LOCAL_SPLAT_URL = "/splats/sleek-icelandic-bedroom.spz";
+const MARBLE_POLL_INTERVAL_MS = 2_500;
 
 function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));

@@ -115,6 +115,7 @@ export type Door = {
   id: string;
   name: string;
   wall: WallId;
+  connector?: WallConnectorRef;
   offset: number;
   width: number;
   height: number;
@@ -124,6 +125,7 @@ export type WindowOpening = {
   id: string;
   name: string;
   wall: WallId;
+  connector?: WallConnectorRef;
   offset: number;
   baseY: number;
   width: number;
@@ -138,6 +140,12 @@ export type WallSegment = {
 };
 
 export type WallSegmentation = Record<WallId, WallSegment[]>;
+
+export type WallConnectorRef = {
+  wall: WallId;
+  segmentId: string;
+  side: "start" | "end";
+};
 
 export type SelectedRef =
   | { type: "wall"; id: WallId }

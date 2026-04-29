@@ -343,6 +343,135 @@ export function clampWindowVerticalOffset(room: RoomBounds, baseY: number, heigh
   return Math.min(room.height - height - 0.05, Math.max(0.1, baseY));
 }
 
+export function clampOpeningsToLayout(
+  room: RoomBounds,
+  wallSegments: WallSegmentation,
+  doors: Door[],
+  windows: WindowOpening[],
+) {
+  return {
+    doors: doors.map((door) => clampDoorToLayout(room, wallSegments, door)),
+    windows: windows.map((window) => clampWindowToLayout(room, wallSegments, window)),
+  };
+}
+
+function clampDoorToLayout(room: RoomBounds, wallSegments: WallSegmentation, door: Door): Door {
+  const bounds = openingBoundsForLayout(room, wallSegments, door);
+  const { width, offset } = clampOpeningToBounds(bounds, door.width, door.offset);
+  return {
+    ...door,
+    connector: bounds.connectorValid ? door.connector : undefined,
+    width,
+    offset,
+  };
+}
+
+function clampWindowToLayout(
+  room: RoomBounds,
+  wallSegments: WallSegmentation,
+  window: WindowOpening,
+): WindowOpening {
+  const bounds = openingBoundsForLayout(room, wallSegments, window);
+  const { width, offset } = clampOpeningToBounds(bounds, window.width, window.offset);
+  return {
+    ...window,
+    connector: bounds.connectorValid ? window.connector : undefined,
+    width,
+    offset,
+    baseY: clampWindowVerticalOffset(room, window.baseY, window.height),
+  };
+}
+
+function clampOpeningToBounds(bounds: OpeningLayoutBounds, width: number, offset: number) {
+  const span = Math.max(0.25, bounds.maxOffset - bounds.minOffset);
+  const nextWidth = Math.min(Math.max(0.25, width), span);
+  const min = bounds.minOffset + nextWidth / 2;
+  const max = bounds.maxOffset - nextWidth / 2;
+  const nextOffset = max < min ? (bounds.minOffset + bounds.maxOffset) / 2 : Math.min(max, Math.max(min, offset));
+  return { width: nextWidth, offset: nextOffset };
+}
+
+type OpeningLayoutBounds = {
+  minOffset: number;
+  maxOffset: number;
+  connectorValid: boolean;
+};
+
+function openingBoundsForLayout(
+  room: RoomBounds,
+  wallSegments: WallSegmentation,
+  opening: Door | WindowOpening,
+): OpeningLayoutBounds {
+  if (opening.connector) {
+    const connectorLength = connectorOpeningLength(wallSegments, opening.connector);
+    if (connectorLength !== null) {
+      return {
+        minOffset: -connectorLength / 2,
+        maxOffset: connectorLength / 2,
+        connectorValid: true,
+      };
+    }
+  }
+
+  const run = openingWallRunBounds(room, wallSegments, opening.wall, opening.offset);
+  return {
+    minOffset: run?.minOffset ?? -wallAxisLength(room, opening.wall) / 2,
+    maxOffset: run?.maxOffset ?? wallAxisLength(room, opening.wall) / 2,
+    connectorValid: false,
+  };
+}
+
+function connectorOpeningLength(segmentation: WallSegmentation, ref: NonNullable<Door["connector"]>) {
+  const segments = segmentation[ref.wall];
+  const index = segments.findIndex((segment) => segment.id === ref.segmentId);
+  if (index === -1) return null;
+
+  const segment = segments[index];
+  const neighbor = ref.side === "start" ? segments[index - 1] : segments[index + 1];
+  if (!neighbor && segment.displacement >= -0.001) return null;
+
+  const fromDisplacement = ref.side === "start"
+    ? neighbor?.displacement ?? 0
+    : segment.displacement;
+  const toDisplacement = ref.side === "start"
+    ? segment.displacement
+    : neighbor?.displacement ?? 0;
+  const length = Math.abs(toDisplacement - fromDisplacement);
+  return length > 0.001 ? length : null;
+}
+
+function openingWallRunBounds(
+  room: RoomBounds,
+  segmentation: WallSegmentation,
+  wall: WallId,
+  currentOffset: number,
+) {
+  const segments = segmentation[wall];
+  if (!segments.length) return null;
+  const currentFraction = offsetToFraction(room, wall, currentOffset);
+  const index = segments.findIndex((segment) => currentFraction >= segment.start && currentFraction <= segment.end);
+  if (index === -1) return null;
+
+  const base = segments[index];
+  let startIndex = index;
+  let endIndex = index;
+
+  for (let scan = index - 1; scan >= 0; scan -= 1) {
+    if (Math.abs(segments[scan].displacement - base.displacement) > 0.001) break;
+    startIndex = scan;
+  }
+
+  for (let scan = index + 1; scan < segments.length; scan += 1) {
+    if (Math.abs(segments[scan].displacement - base.displacement) > 0.001) break;
+    endIndex = scan;
+  }
+
+  return {
+    minOffset: fractionToOffset(room, wall, segments[startIndex].start),
+    maxOffset: fractionToOffset(room, wall, segments[endIndex].end),
+  };
+}
+
 export function createInitialDoor(room: RoomBounds): Door {
   const width = Math.min(0.9, Math.max(0.65, (room.maxX - room.minX) * 0.16));
   const height = Math.min(2.05, Math.max(1.75, room.height * 0.74));
@@ -540,7 +669,47 @@ export function buildFloorPolygon(
     }
   }
 
-  return points;
+  return orthogonalizeFloorPolygon(points);
+}
+
+function orthogonalizeFloorPolygon(points: FloorPoint[]): FloorPoint[] {
+  if (points.length < 2) return points;
+
+  const EPS = 1e-4;
+  const output: FloorPoint[] = [];
+  const pushPoint = (point: FloorPoint) => {
+    const last = output[output.length - 1];
+    if (last && Math.abs(last.x - point.x) < EPS && Math.abs(last.z - point.z) < EPS) return;
+    output.push(point);
+  };
+
+  const isHorizontal = (a: FloorPoint, b: FloorPoint) => Math.abs(a.z - b.z) < EPS;
+  const isVertical = (a: FloorPoint, b: FloorPoint) => Math.abs(a.x - b.x) < EPS;
+
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index];
+    const next = points[(index + 1) % points.length];
+    pushPoint(current);
+
+    if (isHorizontal(current, next) || isVertical(current, next)) continue;
+
+    const previous = points[(index - 1 + points.length) % points.length];
+    const enteringHorizontally = isHorizontal(previous, current);
+    const corner = enteringHorizontally
+      ? { x: next.x, z: current.z }
+      : { x: current.x, z: next.z };
+    pushPoint(corner);
+  }
+
+  if (output.length > 1) {
+    const first = output[0];
+    const last = output[output.length - 1];
+    if (Math.abs(first.x - last.x) < EPS && Math.abs(first.z - last.z) < EPS) {
+      output.pop();
+    }
+  }
+
+  return output;
 }
 
 function inferPrimitive(prompt: string): FurnitureAsset["primitive"] {

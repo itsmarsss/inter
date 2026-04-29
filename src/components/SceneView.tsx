@@ -22,7 +22,6 @@ import {
   isSegmentationDefault,
   offsetToFraction,
   resizeRoomFromWall,
-  roomDimensions,
   setRoomDimensionFromWall,
   setSegmentDisplacement,
   wallAxisLength,
@@ -42,6 +41,7 @@ import type {
   ShapeKind,
   ToolMode,
   Vec3,
+  WallConnectorRef,
   WallId,
   WallSegment,
   WallSegmentation,
@@ -150,7 +150,11 @@ type ShapeResizeSession = {
   sign: -1 | 1;
   startScale: Vec3;
   startLocalValue: number;
+  screenAxisX: number;
+  screenAxisY: number;
+  screenAxisLengthSq: number;
   startClientY: number;
+  startClientX: number;
   latestClientX: number;
   latestClientY: number;
   rafId: number | null;
@@ -179,15 +183,39 @@ type InstanceRotateSession = {
   previousControlsEnabled: boolean;
 };
 
+type InstanceScaleSession = {
+  instanceId: string;
+  pointerId: number;
+  axis: ShapeResizeAxis;
+  sign: -1 | 1;
+  startScale: Vec3;
+  baseSize: Vec3;
+  screenAxisX: number;
+  screenAxisY: number;
+  screenAxisLengthSq: number;
+  startClientX: number;
+  startClientY: number;
+  latestClientX: number;
+  latestClientY: number;
+  rafId: number | null;
+  previousControlsEnabled: boolean;
+};
+
 type OpeningKind = "door" | "window";
 
 type OpeningDragSession = {
   kind: OpeningKind;
   id: string;
+  mode: "move" | "scale";
   pointerId: number;
   wall: WallId;
+  connector?: WallConnectorRef;
   startOffset: number;
   startBaseY: number;
+  startWidth: number;
+  startHeight: number;
+  startPointerAlong: number;
+  startPointerY: number;
   grabOffsetAlong: number;
   grabOffsetVertical: number;
   latestClientX: number;
@@ -201,6 +229,22 @@ type SegmentDisplacementSession = {
   pointerId: number;
   wall: WallId;
   startDisplacement: number;
+  startClientX: number;
+  startClientY: number;
+  screenAxisX: number;
+  screenAxisY: number;
+  screenAxisLengthSq: number;
+  latestClientX: number;
+  latestClientY: number;
+  rafId: number | null;
+  previousControlsEnabled: boolean;
+};
+
+type ConnectorBoundarySession = {
+  connector: WallConnectorRef;
+  pointerId: number;
+  startFraction: number;
+  grabOffset: number;
   startClientX: number;
   startClientY: number;
   screenAxisX: number;
@@ -411,6 +455,23 @@ function furnitureSplatRegion(instance: FurnitureInstance, primitive: FurnitureA
     size: scaleSize(profile.size, instance.scale),
     shape: profile.shape,
   };
+}
+
+function furnitureResizeHandleSize(asset?: FurnitureAsset): Vec3 {
+  const profile = FURNITURE_REGION_PROFILES[asset?.primitive ?? "sofa"];
+  const footprint = asset?.footprint;
+  if (
+    footprint &&
+    Number.isFinite(footprint.width) &&
+    Number.isFinite(footprint.depth) &&
+    Number.isFinite(footprint.height) &&
+    footprint.width > 0 &&
+    footprint.depth > 0 &&
+    footprint.height > 0
+  ) {
+    return [footprint.width, footprint.height, footprint.depth];
+  }
+  return profile.size;
 }
 
 function shapeSplatRegion(shape: CustomShape): SplatObjectRegion {
@@ -689,8 +750,10 @@ function SceneContent({
   const shapeResizeRef = useRef<ShapeResizeSession | null>(null);
   const shapeRotateRef = useRef<ShapeRotateSession | null>(null);
   const instanceRotateRef = useRef<InstanceRotateSession | null>(null);
+  const instanceScaleRef = useRef<InstanceScaleSession | null>(null);
   const openingDragRef = useRef<OpeningDragSession | null>(null);
   const segmentDragRef = useRef<SegmentDisplacementSession | null>(null);
+  const connectorDragRef = useRef<ConnectorBoundarySession | null>(null);
   const pointerScratchRef = useRef({
     pointer: new THREE.Vector2(),
     raycaster: new THREE.Raycaster(),
@@ -856,6 +919,43 @@ function SceneContent({
     [camera, gl.domElement],
   );
 
+  const projectPointerToConnectorPlane = useCallback(
+    (
+      connector: WallConnectorRef,
+      clientX: number,
+      clientY: number,
+    ): { offsetAlong: number; y: number; descriptor: WallConnectorDescriptor } | null => {
+      const descriptor = connectorDescriptor(roomRef.current, wallSegmentsRef.current, connector);
+      if (!descriptor) return null;
+
+      const rect = gl.domElement.getBoundingClientRect();
+      const ndc = new THREE.Vector2(
+        ((clientX - rect.left) / rect.width) * 2 - 1,
+        -((clientY - rect.top) / rect.height) * 2 + 1,
+      );
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(ndc, camera);
+      const normal = descriptor.axis === "z"
+        ? new THREE.Vector3(1, 0, 0)
+        : new THREE.Vector3(0, 0, 1);
+      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(
+        normal,
+        new THREE.Vector3(descriptor.position[0], 0, descriptor.position[2]),
+      );
+      const target = new THREE.Vector3();
+      const hit = ray.ray.intersectPlane(plane, target);
+      if (!hit) return null;
+
+      const coord = descriptor.axis === "z" ? target.z : target.x;
+      return {
+        offsetAlong: (coord - descriptor.midCoord) * descriptor.directionSign,
+        y: target.y,
+        descriptor,
+      };
+    },
+    [camera, gl.domElement],
+  );
+
   useEffect(() => {
     setProjector(projectPointerToFloor);
   }, [projectPointerToFloor, setProjector]);
@@ -975,6 +1075,97 @@ function SceneContent({
   useEffect(() => {
     const element = gl.domElement;
 
+    function applyInstanceScale() {
+      const session = instanceScaleRef.current;
+      if (!session) return;
+
+      session.rafId = null;
+      const instance = instancesRef.current.find((item) => item.id === session.instanceId);
+      if (!instance) return;
+
+      let nextAxisScale = session.startScale[session.axis];
+      if (session.axis === 1) {
+        nextAxisScale = session.startScale[1] + session.sign * (session.startClientY - session.latestClientY) * 0.0125;
+      } else {
+        if (session.screenAxisLengthSq < 16) return;
+        const deltaX = session.latestClientX - session.startClientX;
+        const deltaY = session.latestClientY - session.startClientY;
+        const meters =
+          (deltaX * session.screenAxisX + deltaY * session.screenAxisY) / session.screenAxisLengthSq;
+        const baseSize = Math.max(0.1, session.baseSize[session.axis]);
+        nextAxisScale = session.startScale[session.axis] + session.sign * (2 * meters) / baseSize;
+      }
+
+      const nextScale: Vec3 = [...session.startScale];
+      nextScale[session.axis] = Math.max(0.05, Math.abs(nextAxisScale));
+
+      onInstancesChangeRef.current(
+        instancesRef.current.map((item) =>
+          item.id === session.instanceId ? { ...item, position: [item.position[0], 0, item.position[2]], scale: nextScale } : item,
+        ),
+      );
+    }
+
+    function scheduleInstanceScaleUpdate() {
+      const session = instanceScaleRef.current;
+      if (!session || session.rafId !== null) return;
+      session.rafId = window.requestAnimationFrame(applyInstanceScale);
+    }
+
+    function endInstanceScale(pointerId?: number) {
+      const session = instanceScaleRef.current;
+      if (!session || (pointerId !== undefined && session.pointerId !== pointerId)) return;
+
+      if (session.rafId !== null) {
+        window.cancelAnimationFrame(session.rafId);
+      }
+
+      try {
+        if (element.hasPointerCapture(session.pointerId)) {
+          element.releasePointerCapture(session.pointerId);
+        }
+      } catch {
+        // Pointer capture can already be gone after browser-level cancellation.
+      }
+
+      const controls = orbitControlsRef.current;
+      if (controls) controls.enabled = session.previousControlsEnabled;
+      instanceScaleRef.current = null;
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      const session = instanceScaleRef.current;
+      if (!session || session.pointerId !== event.pointerId) return;
+      session.latestClientX = event.clientX;
+      session.latestClientY = event.clientY;
+      scheduleInstanceScaleUpdate();
+    }
+
+    function handlePointerUp(event: PointerEvent) {
+      endInstanceScale(event.pointerId);
+    }
+
+    function handleBlur() {
+      endInstanceScale();
+    }
+
+    window.addEventListener("pointermove", handlePointerMove, { capture: true });
+    window.addEventListener("pointerup", handlePointerUp, { capture: true });
+    window.addEventListener("pointercancel", handlePointerUp, { capture: true });
+    window.addEventListener("blur", handleBlur);
+
+    return () => {
+      endInstanceScale();
+      window.removeEventListener("pointermove", handlePointerMove, { capture: true });
+      window.removeEventListener("pointerup", handlePointerUp, { capture: true });
+      window.removeEventListener("pointercancel", handlePointerUp, { capture: true });
+      window.removeEventListener("blur", handleBlur);
+    };
+  }, [gl.domElement, projectPointerToFloor]);
+
+  useEffect(() => {
+    const element = gl.domElement;
+
     function applyObjectDrag() {
       const session = objectDragRef.current;
       if (!session) return;
@@ -996,7 +1187,7 @@ function SceneContent({
       if (session.target.type === "furniture") {
         onInstancesChangeRef.current(
           instancesRef.current.map((instance) =>
-            instance.id === session.target.id ? { ...instance, position: nextPosition } : instance,
+            instance.id === session.target.id ? { ...instance, position: [nextPosition[0], 0, nextPosition[2]] } : instance,
           ),
         );
         return;
@@ -1013,7 +1204,9 @@ function SceneContent({
 
       onShapesChangeRef.current(
         shapesRef.current.map((shape) =>
-          shape.id === session.target.id ? { ...shape, position: nextPosition } : shape,
+          shape.id === session.target.id
+            ? { ...shape, position: [nextPosition[0], groundedShapeY(shape.kind, shape.scale[1]), nextPosition[2]] }
+            : shape,
         ),
       );
     }
@@ -1092,23 +1285,36 @@ function SceneContent({
 
       let nextAxisScale = session.startScale[session.axis];
       if (session.axis === 1) {
-        nextAxisScale = session.startScale[1] + session.sign * (session.startClientY - session.latestClientY) * 0.025;
+        nextAxisScale = session.startScale[1] + session.sign * (session.startClientY - session.latestClientY) * 0.0125;
       } else {
-        const nextLocalValue = shapeLocalPointerValue(
-          shape,
-          session.axis,
-          session.latestClientX,
-          session.latestClientY,
-          projectPointerToFloor,
-        );
-        if (nextLocalValue === null) return;
-        nextAxisScale = session.startScale[session.axis] + session.sign * 2 * (nextLocalValue - session.startLocalValue);
+        const sensitivity = session.axis === 2 ? 1 : 2;
+        if (session.screenAxisLengthSq >= 16) {
+          const deltaX = session.latestClientX - session.startClientX;
+          const deltaY = session.latestClientY - session.startClientY;
+          const meters =
+            (deltaX * session.screenAxisX + deltaY * session.screenAxisY) / session.screenAxisLengthSq;
+          nextAxisScale = session.startScale[session.axis] + session.sign * sensitivity * meters;
+        } else {
+          const nextLocalValue = shapeLocalPointerValue(
+            shape,
+            session.axis,
+            session.latestClientX,
+            session.latestClientY,
+            projectPointerToFloor,
+          );
+          if (nextLocalValue === null) return;
+          nextAxisScale = session.startScale[session.axis] + session.sign * sensitivity * (nextLocalValue - session.startLocalValue);
+        }
       }
 
       const nextScale: Vec3 = [...session.startScale];
       nextScale[session.axis] = Math.max(0.05, Math.abs(nextAxisScale));
       onShapesChangeRef.current(
-        shapesRef.current.map((item) => (item.id === session.shapeId ? { ...item, scale: nextScale } : item)),
+        shapesRef.current.map((item) =>
+          item.id === session.shapeId
+            ? { ...item, position: [item.position[0], groundedShapeY(item.kind, nextScale[1]), item.position[2]], scale: nextScale }
+            : item,
+        ),
       );
     }
 
@@ -1362,19 +1568,40 @@ function SceneContent({
       const session = openingDragRef.current;
       if (!session) return;
       session.rafId = null;
-      const projection = projectPointerToWallPlane(session.wall, session.latestClientX, session.latestClientY);
+      const connectorProjection = session.connector
+        ? projectPointerToConnectorPlane(session.connector, session.latestClientX, session.latestClientY)
+        : null;
+      const projection = connectorProjection ?? projectPointerToWallPlane(session.wall, session.latestClientX, session.latestClientY);
       if (!projection) return;
 
       const room = roomRef.current;
       if (session.kind === "door") {
         const door = doorsRef.current.find((item) => item.id === session.id);
         if (!door) return;
-        const nextOffset = clampWallOffset(
-          room,
-          session.wall,
-          projection.offsetAlong - session.grabOffsetAlong,
-          door.width,
-        );
+        if (session.mode === "scale") {
+          const widthFromDelta = session.startWidth + Math.abs(projection.offsetAlong - session.startPointerAlong) * 2;
+          const nextWidth = connectorProjection
+            ? Math.min(connectorProjection.descriptor.length * 0.95, Math.max(0.25, widthFromDelta))
+            : clampOpeningWidthOnWallRun(room, wallSegmentsRef.current, session.wall, session.startOffset, widthFromDelta);
+          const nextHeight = Math.min(room.height - 0.05, Math.max(0.6, session.startHeight + projection.y - session.startPointerY));
+          onDoorsChangeRef.current(
+            doorsRef.current.map((item) =>
+              item.id === session.id ? { ...item, width: nextWidth, height: nextHeight } : item,
+            ),
+          );
+          return;
+        }
+        const rawOffset = projection.offsetAlong - session.grabOffsetAlong;
+        const nextOffset = connectorProjection
+          ? clampConnectorOffset(connectorProjection.descriptor, rawOffset, door.width)
+          : clampOpeningOffsetOnWallRun(
+              room,
+              wallSegmentsRef.current,
+              session.wall,
+              door.offset,
+              rawOffset,
+              door.width,
+            );
         if (nextOffset === door.offset) return;
         onDoorsChangeRef.current(
           doorsRef.current.map((item) =>
@@ -1386,12 +1613,30 @@ function SceneContent({
 
       const window = windowsRef.current.find((item) => item.id === session.id);
       if (!window) return;
-      const nextOffset = clampWallOffset(
-        room,
-        session.wall,
-        projection.offsetAlong - session.grabOffsetAlong,
-        window.width,
-      );
+      if (session.mode === "scale") {
+        const widthFromDelta = session.startWidth + Math.abs(projection.offsetAlong - session.startPointerAlong) * 2;
+        const nextWidth = connectorProjection
+          ? Math.min(connectorProjection.descriptor.length * 0.95, Math.max(0.25, widthFromDelta))
+          : clampOpeningWidthOnWallRun(room, wallSegmentsRef.current, session.wall, session.startOffset, widthFromDelta);
+        const nextHeight = Math.min(room.height - window.baseY - 0.05, Math.max(0.3, session.startHeight + projection.y - session.startPointerY));
+        onWindowsChangeRef.current(
+          windowsRef.current.map((item) =>
+            item.id === session.id ? { ...item, width: nextWidth, height: nextHeight } : item,
+          ),
+        );
+        return;
+      }
+      const rawOffset = projection.offsetAlong - session.grabOffsetAlong;
+      const nextOffset = connectorProjection
+        ? clampConnectorOffset(connectorProjection.descriptor, rawOffset, window.width)
+        : clampOpeningOffsetOnWallRun(
+            room,
+            wallSegmentsRef.current,
+            session.wall,
+            window.offset,
+            rawOffset,
+            window.width,
+          );
       const nextBaseY = clampWindowVerticalOffset(
         room,
         projection.y - session.grabOffsetVertical,
@@ -1455,7 +1700,7 @@ function SceneContent({
       window.removeEventListener("pointercancel", handlePointerUp, { capture: true });
       window.removeEventListener("blur", handleBlur);
     };
-  }, [gl.domElement, projectPointerToWallPlane]);
+  }, [gl.domElement, projectPointerToConnectorPlane, projectPointerToWallPlane]);
 
   useEffect(() => {
     const element = gl.domElement;
@@ -1528,6 +1773,82 @@ function SceneContent({
 
     return () => {
       endSegmentDrag();
+      window.removeEventListener("pointermove", handlePointerMove, { capture: true });
+      window.removeEventListener("pointerup", handlePointerUp, { capture: true });
+      window.removeEventListener("pointercancel", handlePointerUp, { capture: true });
+      window.removeEventListener("blur", handleBlur);
+    };
+  }, [gl.domElement]);
+
+  useEffect(() => {
+    const element = gl.domElement;
+
+    function applyConnectorDrag() {
+      const session = connectorDragRef.current;
+      if (!session) return;
+      session.rafId = null;
+      if (session.screenAxisLengthSq < 0.0001) return;
+
+      const room = roomRef.current;
+      const segmentation = wallSegmentsRef.current;
+      const length = wallAxisLength(room, session.connector.wall);
+      if (length <= 0) return;
+
+      const deltaX = session.latestClientX - session.startClientX;
+      const deltaY = session.latestClientY - session.startClientY;
+      const meters =
+        (deltaX * session.screenAxisX + deltaY * session.screenAxisY) / session.screenAxisLengthSq;
+      const nextFraction = session.startFraction + (meters - session.grabOffset) / length;
+      const next = setConnectorBoundaryFraction(segmentation, session.connector, nextFraction);
+      if (next === segmentation) return;
+      onWallSegmentsChangeRef.current(next);
+    }
+
+    function scheduleConnectorDragUpdate() {
+      const session = connectorDragRef.current;
+      if (!session || session.rafId !== null) return;
+      session.rafId = window.requestAnimationFrame(applyConnectorDrag);
+    }
+
+    function endConnectorDrag(pointerId?: number) {
+      const session = connectorDragRef.current;
+      if (!session || (pointerId !== undefined && session.pointerId !== pointerId)) return;
+      if (session.rafId !== null) window.cancelAnimationFrame(session.rafId);
+      try {
+        if (element.hasPointerCapture(session.pointerId)) {
+          element.releasePointerCapture(session.pointerId);
+        }
+      } catch {
+        // ignore release errors
+      }
+      const controls = orbitControlsRef.current;
+      if (controls) controls.enabled = session.previousControlsEnabled;
+      connectorDragRef.current = null;
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      const session = connectorDragRef.current;
+      if (!session || session.pointerId !== event.pointerId) return;
+      session.latestClientX = event.clientX;
+      session.latestClientY = event.clientY;
+      scheduleConnectorDragUpdate();
+    }
+
+    function handlePointerUp(event: PointerEvent) {
+      endConnectorDrag(event.pointerId);
+    }
+
+    function handleBlur() {
+      endConnectorDrag();
+    }
+
+    window.addEventListener("pointermove", handlePointerMove, { capture: true });
+    window.addEventListener("pointerup", handlePointerUp, { capture: true });
+    window.addEventListener("pointercancel", handlePointerUp, { capture: true });
+    window.addEventListener("blur", handleBlur);
+
+    return () => {
+      endConnectorDrag();
       window.removeEventListener("pointermove", handlePointerMove, { capture: true });
       window.removeEventListener("pointerup", handlePointerUp, { capture: true });
       window.removeEventListener("pointercancel", handlePointerUp, { capture: true });
@@ -1670,7 +1991,7 @@ function SceneContent({
     event: ThreeEvent<PointerEvent>,
   ) {
     if (viewMode !== "blockout") return;
-    if (tool !== "select" && tool !== "move") return;
+    if (tool !== "select" && tool !== "move" && tool !== "scale") return;
     if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
 
     const point = projectPointerToFloor(event.clientX, event.clientY);
@@ -1713,6 +2034,7 @@ function SceneContent({
     if (startLocalValue === null) return;
 
     const controls = orbitControlsRef.current;
+    const screenAxis = screenAxisForLocalAxis(shape.position, shape.rotation, axis, camera, gl.domElement);
     shapeResizeRef.current = {
       shapeId: shape.id,
       pointerId: event.pointerId,
@@ -1720,6 +2042,10 @@ function SceneContent({
       sign,
       startScale: [...shape.scale],
       startLocalValue,
+      screenAxisX: screenAxis.x,
+      screenAxisY: screenAxis.y,
+      screenAxisLengthSq: screenAxis.lengthSq,
+      startClientX: event.clientX,
       startClientY: event.clientY,
       latestClientX: event.clientX,
       latestClientY: event.clientY,
@@ -1739,6 +2065,49 @@ function SceneContent({
     }
 
     onSelect({ type: "shape", id: shape.id });
+  }
+
+  function handleInstanceScalePointerDown(
+    instance: FurnitureInstance,
+    baseSize: Vec3,
+    axis: ShapeResizeAxis,
+    sign: -1 | 1,
+    event: ThreeEvent<PointerEvent>,
+  ) {
+    if (viewMode !== "blockout") return;
+    if (tool !== "select" && tool !== "move" && tool !== "scale") return;
+    if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
+
+    event.stopPropagation();
+
+    const controls = orbitControlsRef.current;
+    const screenAxis = screenAxisForLocalAxis(instance.position, instance.rotation, axis, camera, gl.domElement);
+    instanceScaleRef.current = {
+      instanceId: instance.id,
+      pointerId: event.pointerId,
+      axis,
+      sign,
+      startScale: [...instance.scale],
+      baseSize,
+      screenAxisX: screenAxis.x,
+      screenAxisY: screenAxis.y,
+      screenAxisLengthSq: screenAxis.lengthSq,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      latestClientX: event.clientX,
+      latestClientY: event.clientY,
+      rafId: null,
+      previousControlsEnabled: controls?.enabled ?? true,
+    };
+
+    objectDragRef.current = null;
+    if (controls) controls.enabled = false;
+    try {
+      gl.domElement.setPointerCapture(event.pointerId);
+    } catch {
+      // Some browsers can reject capture if the native pointer sequence has already ended.
+    }
+    onSelect({ type: "furniture", id: instance.id });
   }
 
   function handleInstanceRotatePointerDown(instance: FurnitureInstance, event: ThreeEvent<PointerEvent>) {
@@ -1818,6 +2187,7 @@ function SceneContent({
     kind: OpeningKind,
     target: Door | WindowOpening,
     event: ThreeEvent<PointerEvent>,
+    forcedMode?: OpeningDragSession["mode"],
   ) {
     if (viewMode !== "blockout") return;
     if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
@@ -1825,9 +2195,12 @@ function SceneContent({
     event.stopPropagation();
     onSelect({ type: kind, id: target.id });
 
-    if (tool !== "select" && tool !== "move") return;
+    if (!forcedMode && tool !== "select" && tool !== "move" && tool !== "scale") return;
 
-    const projection = projectPointerToWallPlane(target.wall, event.clientX, event.clientY);
+    const connectorProjection = target.connector
+      ? projectPointerToConnectorPlane(target.connector, event.clientX, event.clientY)
+      : null;
+    const projection = connectorProjection ?? projectPointerToWallPlane(target.wall, event.clientX, event.clientY);
     if (!projection) return;
 
     const baseY = kind === "door" ? 0 : (target as WindowOpening).baseY;
@@ -1837,10 +2210,16 @@ function SceneContent({
     openingDragRef.current = {
       kind,
       id: target.id,
+      mode: forcedMode ?? (tool === "scale" ? "scale" : "move"),
       pointerId: event.pointerId,
       wall: target.wall,
+      connector: target.connector,
       startOffset: target.offset,
       startBaseY: baseY,
+      startWidth: target.width,
+      startHeight: target.height,
+      startPointerAlong: projection.offsetAlong,
+      startPointerY: projection.y,
       grabOffsetAlong: projection.offsetAlong - target.offset,
       grabOffsetVertical: grabVertical,
       latestClientX: event.clientX,
@@ -1861,6 +2240,37 @@ function SceneContent({
     if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
 
     event.stopPropagation();
+
+    if (tool === "add-door") {
+      const room = roomRef.current;
+      const projection = projectPointerToWallPlane(wall, event.clientX, event.clientY);
+      const newDoor = createDoor(room, wall);
+      newDoor.width = Math.min(newDoor.width, Math.max(0.35, (segment.end - segment.start) * wallAxisLength(room, wall) * 0.9));
+      newDoor.offset = clampSegmentOffset(room, wall, segment, projection?.offsetAlong ?? 0, newDoor.width);
+      onDoorsChangeRef.current([...doorsRef.current, newDoor]);
+      onSelect({ type: "door", id: newDoor.id });
+      onToolChange("select");
+      return;
+    }
+
+    if (tool === "add-window") {
+      const room = roomRef.current;
+      const projection = projectPointerToWallPlane(wall, event.clientX, event.clientY);
+      const newWindow = createWindowOpening(room, wall);
+      newWindow.width = Math.min(newWindow.width, Math.max(0.35, (segment.end - segment.start) * wallAxisLength(room, wall) * 0.9));
+      newWindow.offset = clampSegmentOffset(room, wall, segment, projection?.offsetAlong ?? 0, newWindow.width);
+      if (projection) {
+        newWindow.baseY = clampWindowVerticalOffset(
+          room,
+          (projection.y ?? newWindow.baseY) - newWindow.height / 2,
+          newWindow.height,
+        );
+      }
+      onWindowsChangeRef.current([...windowsRef.current, newWindow]);
+      onSelect({ type: "window", id: newWindow.id });
+      onToolChange("select");
+      return;
+    }
 
     if (tool === "cut-wall") {
       const room = roomRef.current;
@@ -1884,6 +2294,89 @@ function SceneContent({
     if (tool !== "select" && tool !== "move") return;
 
     beginSegmentDrag(segment.id, wall, segment.displacement, event);
+  }
+
+  function handleConnectorPointerDown(connector: WallConnectorRef, event: ThreeEvent<PointerEvent>) {
+    if (viewMode !== "blockout") return;
+    if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
+
+    event.stopPropagation();
+    const projection = projectPointerToConnectorPlane(connector, event.clientX, event.clientY);
+    if (!projection) return;
+
+    if (tool === "add-door") {
+      const newDoor = createDoor(roomRef.current, connector.wall);
+      newDoor.connector = connector;
+      newDoor.width = Math.min(newDoor.width, projection.descriptor.length * 0.9);
+      newDoor.offset = clampConnectorOffset(projection.descriptor, projection.offsetAlong, newDoor.width);
+      onDoorsChangeRef.current([...doorsRef.current, newDoor]);
+      onSelect({ type: "door", id: newDoor.id });
+      onToolChange("select");
+      return;
+    }
+
+    if (tool === "add-window") {
+      const newWindow = createWindowOpening(roomRef.current, connector.wall);
+      newWindow.connector = connector;
+      newWindow.width = Math.min(newWindow.width, projection.descriptor.length * 0.9);
+      newWindow.offset = clampConnectorOffset(projection.descriptor, projection.offsetAlong, newWindow.width);
+      newWindow.baseY = clampWindowVerticalOffset(
+        roomRef.current,
+        projection.y - newWindow.height / 2,
+        newWindow.height,
+      );
+      onWindowsChangeRef.current([...windowsRef.current, newWindow]);
+      onSelect({ type: "window", id: newWindow.id });
+      onToolChange("select");
+      return;
+    }
+
+    onSelect({ type: "wall-segment", wall: connector.wall, id: connector.segmentId });
+    if (tool !== "select" && tool !== "move") return;
+
+    if (!projection.descriptor.hasNeighbor) {
+      beginSegmentDrag(
+        connector.segmentId,
+        connector.wall,
+        projection.descriptor.segment.displacement,
+        event,
+      );
+      return;
+    }
+
+    beginConnectorDrag(connector, projection.descriptor.fraction, event);
+  }
+
+  function beginConnectorDrag(
+    connector: WallConnectorRef,
+    startFraction: number,
+    event: ThreeEvent<PointerEvent>,
+  ) {
+    const descriptor = connectorDescriptor(roomRef.current, wallSegmentsRef.current, connector);
+    if (!descriptor) return;
+    const screenAxis = screenAxisForConnectorBoundary(connector.wall, descriptor.position, camera, gl.domElement);
+    const controls = orbitControlsRef.current;
+    connectorDragRef.current = {
+      connector,
+      pointerId: event.pointerId,
+      startFraction,
+      grabOffset: 0,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      screenAxisX: screenAxis.x,
+      screenAxisY: screenAxis.y,
+      screenAxisLengthSq: screenAxis.lengthSq,
+      latestClientX: event.clientX,
+      latestClientY: event.clientY,
+      rafId: null,
+      previousControlsEnabled: controls?.enabled ?? true,
+    };
+    if (controls) controls.enabled = false;
+    try {
+      gl.domElement.setPointerCapture(event.pointerId);
+    } catch {
+      // ignore capture errors
+    }
   }
 
   function beginSegmentDrag(
@@ -1962,9 +2455,11 @@ function SceneContent({
           onWallPointerOut={(wall) => setHoveredWall((current) => (current === wall ? null : current))}
           onFloorPointerDown={handleFloorPointerDown}
           onSegmentPointerDown={handleSegmentPointerDown}
+          onConnectorPointerDown={handleConnectorPointerDown}
         />
         {instances.map((instance) => {
           const asset = assetById?.get(instance.assetId) ?? assets.find((item) => item.id === instance.assetId);
+          const resizeSize = furnitureResizeHandleSize(asset);
           return (
             <FurnitureNode
               key={instance.id}
@@ -1981,6 +2476,7 @@ function SceneContent({
                 handleObjectPointerDown({ type: "furniture", id: instance.id }, instance.position, event)
               }
               onRotateStart={(event) => handleInstanceRotatePointerDown(instance, event)}
+              onScaleStart={(axis, sign, event) => handleInstanceScalePointerDown(instance, resizeSize, axis, sign, event)}
               onTransformActiveChange={handleTransformActiveChange}
               onChange={updateInstance}
               onMeasured={
@@ -2040,6 +2536,7 @@ function SceneContent({
             hovered={viewMode === "blockout" && hovered?.type === "door" && hovered.id === door.id}
             opacity={blockoutOpacity}
             onPointerDown={(event) => handleOpeningPointerDown("door", door, event)}
+            onResizePointerDown={(event) => handleOpeningPointerDown("door", door, event, "scale")}
             onPointerOver={() => {}}
             onPointerOut={() => {}}
           />
@@ -2054,14 +2551,15 @@ function SceneContent({
             hovered={viewMode === "blockout" && hovered?.type === "window" && hovered.id === window.id}
             opacity={blockoutOpacity}
             onPointerDown={(event) => handleOpeningPointerDown("window", window, event)}
+            onResizePointerDown={(event) => handleOpeningPointerDown("window", window, event, "scale")}
             onPointerOver={() => {}}
             onPointerOut={() => {}}
           />
         ))}
       </group>
       {viewMode === "blockout" ? (
-        <Html position={[room.minX, 0.04, room.maxZ + 0.22]} center zIndexRange={[0, 0]}>
-          <RoomDimensionBadge room={room} onRoomChange={onRoomChange} />
+        <Html position={[floorBounds(room, wallSegments).minX, 0.04, floorBounds(room, wallSegments).maxZ + 0.22]} center zIndexRange={[0, 0]}>
+          <RoomDimensionBadge room={room} wallSegments={wallSegments} onRoomChange={onRoomChange} />
         </Html>
       ) : null}
     </>
@@ -2082,6 +2580,7 @@ function BlockoutReferenceLayer({
   onWallPointerOut,
   onFloorPointerDown,
   onSegmentPointerDown,
+  onConnectorPointerDown,
 }: {
   room: RoomBounds;
   wallSegments: WallSegmentation;
@@ -2096,6 +2595,7 @@ function BlockoutReferenceLayer({
   onWallPointerOut: (wall: WallId) => void;
   onFloorPointerDown: (event: ThreeEvent<PointerEvent>) => void;
   onSegmentPointerDown: (wall: WallId, segment: WallSegment, event: ThreeEvent<PointerEvent>) => void;
+  onConnectorPointerDown: (connector: WallConnectorRef, event: ThreeEvent<PointerEvent>) => void;
 }) {
   const gridCellColor = fadeSceneColor(SCENE_COLORS.gridCell, opacity);
   const gridSectionColor = fadeSceneColor(SCENE_COLORS.gridSection, opacity);
@@ -2136,6 +2636,7 @@ function BlockoutReferenceLayer({
           wall={wall}
           room={room}
           segments={wallSegments[wall]}
+          wallSegments={wallSegments}
           selected={selected}
           hovered={hovered}
           editable={editable}
@@ -2145,6 +2646,7 @@ function BlockoutReferenceLayer({
           onWallPointerOver={onWallPointerOver}
           onWallPointerOut={onWallPointerOut}
           onSegmentPointerDown={onSegmentPointerDown}
+          onConnectorPointerDown={onConnectorPointerDown}
         />
       ))}
     </group>
@@ -2155,6 +2657,7 @@ type SegmentedWallProps = {
   wall: WallId;
   room: RoomBounds;
   segments: WallSegment[];
+  wallSegments: WallSegmentation;
   selected: SelectedRef;
   hovered: SelectedRef;
   editable: boolean;
@@ -2164,12 +2667,14 @@ type SegmentedWallProps = {
   onWallPointerOver: (wall: WallId) => void;
   onWallPointerOut: (wall: WallId) => void;
   onSegmentPointerDown: (wall: WallId, segment: WallSegment, event: ThreeEvent<PointerEvent>) => void;
+  onConnectorPointerDown: (connector: WallConnectorRef, event: ThreeEvent<PointerEvent>) => void;
 };
 
 function SegmentedWall({
   wall,
   room,
   segments,
+  wallSegments,
   selected,
   hovered,
   editable,
@@ -2179,6 +2684,7 @@ function SegmentedWall({
   onWallPointerOver,
   onWallPointerOut,
   onSegmentPointerDown,
+  onConnectorPointerDown,
 }: SegmentedWallProps) {
   const wallSelected = editable && selected?.type === "wall" && selected.id === wall;
   const wallHovered = editable && hovered?.type === "wall" && hovered.id === wall;
@@ -2190,12 +2696,25 @@ function SegmentedWall({
   return (
     <group>
       {segments.map((segment) => {
-        const segmentLength = (segment.end - segment.start) * wallLength;
-        const alongOffset = ((segment.start + segment.end) / 2 - 0.5) * wallLength;
+        const endpoints = segmentWorldEndpoints(room, wallSegments, wall, segment);
+        const segmentLength = endpoints.length;
+        const rawStart = isHorizontal
+          ? room.minX + segment.start * wallLength
+          : room.minZ + segment.start * wallLength;
+        const rawEnd = isHorizontal
+          ? room.minX + segment.end * wallLength
+          : room.minZ + segment.end * wallLength;
+        const rawLength = Math.max(0, rawEnd - rawStart);
+        if (segmentLength < 0.02 && rawLength < 0.02) return null;
         const perp = sign * segment.displacement;
+        const visibleCenter = (endpoints.start + endpoints.end) / 2;
+        const hitCenter = (rawStart + rawEnd) / 2;
         const position: Vec3 = isHorizontal
-          ? [(room.minX + room.maxX) / 2 + alongOffset, room.height / 2, center[2] + perp]
-          : [center[0] + perp, room.height / 2, (room.minZ + room.maxZ) / 2 + alongOffset];
+          ? [visibleCenter, room.height / 2, center[2] + perp]
+          : [center[0] + perp, room.height / 2, visibleCenter];
+        const hitOffset: Vec3 = isHorizontal
+          ? [hitCenter - visibleCenter, 0, 0]
+          : [0, 0, hitCenter - visibleCenter];
         const segmentSelected =
           editable && selected?.type === "wall-segment" && selected.id === segment.id;
         const segmentHovered =
@@ -2206,6 +2725,8 @@ function SegmentedWall({
             key={segment.id}
             wall={wall}
             length={segmentLength}
+            hitLength={rawLength}
+            hitOffset={hitOffset}
             height={room.height}
             position={position}
             opacity={opacity}
@@ -2247,51 +2768,14 @@ function SegmentedWall({
             position={position}
             opacity={opacity}
             highlight={wallSelected || wallHovered}
+            onPointerDown={
+              editable
+                ? (event) => onConnectorPointerDown({ wall, segmentId: segment.id, side: "end" }, event)
+                : undefined
+            }
           />
         );
       })}
-      {(() => {
-        const first = segments[0];
-        if (!first || Math.abs(first.displacement) < 0.001) return null;
-        const startAlong = -wallLength / 2;
-        const midDisp = first.displacement / 2;
-        const perp = sign * midDisp;
-        const position: Vec3 = isHorizontal
-          ? [(room.minX + room.maxX) / 2 + startAlong, room.height / 2, center[2] + perp]
-          : [center[0] + perp, room.height / 2, (room.minZ + room.maxZ) / 2 + startAlong];
-        return (
-          <ConnectorMesh
-            key={`${wall}-start-connector`}
-            wall={wall}
-            depth={Math.abs(first.displacement)}
-            height={room.height}
-            position={position}
-            opacity={opacity}
-            highlight={wallSelected || wallHovered}
-          />
-        );
-      })()}
-      {(() => {
-        const last = segments[segments.length - 1];
-        if (!last || Math.abs(last.displacement) < 0.001) return null;
-        const endAlong = wallLength / 2;
-        const midDisp = last.displacement / 2;
-        const perp = sign * midDisp;
-        const position: Vec3 = isHorizontal
-          ? [(room.minX + room.maxX) / 2 + endAlong, room.height / 2, center[2] + perp]
-          : [center[0] + perp, room.height / 2, (room.minZ + room.maxZ) / 2 + endAlong];
-        return (
-          <ConnectorMesh
-            key={`${wall}-end-connector`}
-            wall={wall}
-            depth={Math.abs(last.displacement)}
-            height={room.height}
-            position={position}
-            opacity={opacity}
-            highlight={wallSelected || wallHovered}
-          />
-        );
-      })()}
     </group>
   );
 }
@@ -2301,14 +2785,90 @@ function wallSurfaceSign(wall: WallId): number {
   return 1;
 }
 
+function segmentWorldEndpoints(
+  room: RoomBounds,
+  segmentation: WallSegmentation,
+  wall: WallId,
+  segment: WallSegment,
+) {
+  const width = room.maxX - room.minX;
+  const depth = room.maxZ - room.minZ;
+
+  if (wall === "north") {
+    return {
+      start: segment.start <= 0.001 ? room.minX + westNorthDisplacement(segmentation) : room.minX + segment.start * width,
+      end: segment.end >= 0.999 ? room.maxX - eastNorthDisplacement(segmentation) : room.minX + segment.end * width,
+      length: Math.max(0, (segment.end >= 0.999 ? room.maxX - eastNorthDisplacement(segmentation) : room.minX + segment.end * width) - (segment.start <= 0.001 ? room.minX + westNorthDisplacement(segmentation) : room.minX + segment.start * width)),
+    };
+  }
+  if (wall === "south") {
+    return {
+      start: segment.start <= 0.001 ? room.minX + westSouthDisplacement(segmentation) : room.minX + segment.start * width,
+      end: segment.end >= 0.999 ? room.maxX - eastSouthDisplacement(segmentation) : room.minX + segment.end * width,
+      length: Math.max(0, (segment.end >= 0.999 ? room.maxX - eastSouthDisplacement(segmentation) : room.minX + segment.end * width) - (segment.start <= 0.001 ? room.minX + westSouthDisplacement(segmentation) : room.minX + segment.start * width)),
+    };
+  }
+  if (wall === "east") {
+    return {
+      start: segment.start <= 0.001 ? room.minZ + southEastDisplacement(segmentation) : room.minZ + segment.start * depth,
+      end: segment.end >= 0.999 ? room.maxZ - northEastDisplacement(segmentation) : room.minZ + segment.end * depth,
+      length: Math.max(0, (segment.end >= 0.999 ? room.maxZ - northEastDisplacement(segmentation) : room.minZ + segment.end * depth) - (segment.start <= 0.001 ? room.minZ + southEastDisplacement(segmentation) : room.minZ + segment.start * depth)),
+    };
+  }
+  return {
+    start: segment.start <= 0.001 ? room.minZ + southWestDisplacement(segmentation) : room.minZ + segment.start * depth,
+    end: segment.end >= 0.999 ? room.maxZ - northWestDisplacement(segmentation) : room.minZ + segment.end * depth,
+    length: Math.max(0, (segment.end >= 0.999 ? room.maxZ - northWestDisplacement(segmentation) : room.minZ + segment.end * depth) - (segment.start <= 0.001 ? room.minZ + southWestDisplacement(segmentation) : room.minZ + segment.start * depth)),
+  };
+}
+
+function northWestDisplacement(segmentation: WallSegmentation) {
+  return segmentation.north[0]?.displacement ?? 0;
+}
+
+function northEastDisplacement(segmentation: WallSegmentation) {
+  return segmentation.north[segmentation.north.length - 1]?.displacement ?? 0;
+}
+
+function southWestDisplacement(segmentation: WallSegmentation) {
+  return segmentation.south[0]?.displacement ?? 0;
+}
+
+function southEastDisplacement(segmentation: WallSegmentation) {
+  return segmentation.south[segmentation.south.length - 1]?.displacement ?? 0;
+}
+
+function westSouthDisplacement(segmentation: WallSegmentation) {
+  return segmentation.west[0]?.displacement ?? 0;
+}
+
+function westNorthDisplacement(segmentation: WallSegmentation) {
+  return segmentation.west[segmentation.west.length - 1]?.displacement ?? 0;
+}
+
+function eastSouthDisplacement(segmentation: WallSegmentation) {
+  return segmentation.east[0]?.displacement ?? 0;
+}
+
+function eastNorthDisplacement(segmentation: WallSegmentation) {
+  return segmentation.east[segmentation.east.length - 1]?.displacement ?? 0;
+}
+
 function RoomDimensionBadge({
   room,
+  wallSegments,
   onRoomChange,
 }: {
   room: RoomBounds;
+  wallSegments: WallSegmentation;
   onRoomChange: (room: RoomBounds) => void;
 }) {
-  const dimensions = roomDimensions(room);
+  const bounds = floorBounds(room, wallSegments);
+  const dimensions = {
+    width: bounds.maxX - bounds.minX,
+    depth: bounds.maxZ - bounds.minZ,
+    height: room.height,
+  };
 
   function commitWidth(value: string) {
     const nextWidth = Number(value);
@@ -2391,6 +2951,22 @@ function DimensionInput({
 
 function formatDimensionValue(value: number) {
   return value.toFixed(1);
+}
+
+function floorBounds(room: RoomBounds, wallSegments: WallSegmentation) {
+  let minX = room.minX;
+  let maxX = room.maxX;
+  let minZ = room.minZ;
+  let maxZ = room.maxZ;
+
+  for (const point of buildFloorPolygon(room, wallSegments)) {
+    minX = Math.min(minX, point.x);
+    maxX = Math.max(maxX, point.x);
+    minZ = Math.min(minZ, point.z);
+    maxZ = Math.max(maxZ, point.z);
+  }
+
+  return { minX, maxX, minZ, maxZ };
 }
 
 function fadeSceneColor(color: string, opacity: number) {
@@ -2981,6 +3557,44 @@ function screenPerpAxisForWall(
       ? [reference[0], reference[1], reference[2] + sign]
       : [reference[0] + sign, reference[1], reference[2]];
   const start = worldToClientPoint(reference, camera, element);
+  const end = worldToClientPoint(axisEnd, camera, element);
+  const x = end.x - start.x;
+  const y = end.y - start.y;
+  return { x, y, lengthSq: x * x + y * y };
+}
+
+function screenAxisForConnectorBoundary(
+  wall: WallId,
+  reference: Vec3,
+  camera: THREE.Camera,
+  element: HTMLCanvasElement,
+) {
+  const axisEnd: Vec3 =
+    wall === "north" || wall === "south"
+      ? [reference[0] + 1, reference[1], reference[2]]
+      : [reference[0], reference[1], reference[2] + 1];
+  const start = worldToClientPoint(reference, camera, element);
+  const end = worldToClientPoint(axisEnd, camera, element);
+  const x = end.x - start.x;
+  const y = end.y - start.y;
+  return { x, y, lengthSq: x * x + y * y };
+}
+
+function screenAxisForLocalAxis(
+  position: Vec3,
+  rotation: Vec3,
+  axis: ShapeResizeAxis,
+  camera: THREE.Camera,
+  element: HTMLCanvasElement,
+) {
+  const axisVector = new THREE.Vector3(axis === 0 ? 1 : 0, axis === 1 ? 1 : 0, axis === 2 ? 1 : 0);
+  axisVector.applyEuler(new THREE.Euler(...rotation));
+  const axisEnd: Vec3 = [
+    position[0] + axisVector.x,
+    position[1] + axisVector.y,
+    position[2] + axisVector.z,
+  ];
+  const start = worldToClientPoint(position, camera, element);
   const end = worldToClientPoint(axisEnd, camera, element);
   const x = end.x - start.x;
   const y = end.y - start.y;
@@ -3840,6 +4454,7 @@ function RoomFloor({
 
 const MAX_OUTWARD_DISPLACEMENT = 6;
 const MAX_INWARD_DISPLACEMENT_FACTOR = 0.7;
+const MIN_CONNECTOR_OPENING_LENGTH = 0.45;
 
 function clampDisplacement(value: number, room: RoomBounds, wall: WallId): number {
   const inwardLimit =
@@ -3847,6 +4462,215 @@ function clampDisplacement(value: number, room: RoomBounds, wall: WallId): numbe
       ? (room.maxX - room.minX) * MAX_INWARD_DISPLACEMENT_FACTOR
       : (room.maxZ - room.minZ) * MAX_INWARD_DISPLACEMENT_FACTOR;
   return Math.min(inwardLimit, Math.max(-MAX_OUTWARD_DISPLACEMENT, value));
+}
+
+type WallConnectorDescriptor = {
+  ref: WallConnectorRef;
+  wall: WallId;
+  segment: WallSegment;
+  length: number;
+  position: Vec3;
+  rotationY: number;
+  axis: "x" | "z";
+  midCoord: number;
+  directionSign: number;
+  fraction: number;
+  hasNeighbor: boolean;
+};
+
+function connectorDescriptor(
+  room: RoomBounds,
+  segmentation: WallSegmentation,
+  ref: WallConnectorRef,
+): WallConnectorDescriptor | null {
+  const segments = segmentation[ref.wall];
+  const index = segments.findIndex((segment) => segment.id === ref.segmentId);
+  if (index === -1) return null;
+
+  const segment = segments[index];
+  const neighbor = ref.side === "start" ? segments[index - 1] : segments[index + 1];
+  if (!neighbor && segment.displacement >= -0.001) return null;
+  const fromDisplacement = ref.side === "start"
+    ? neighbor?.displacement ?? 0
+    : segment.displacement;
+  const toDisplacement = ref.side === "start"
+    ? segment.displacement
+    : neighbor?.displacement ?? 0;
+  const delta = toDisplacement - fromDisplacement;
+  if (Math.abs(delta) < 0.001) return null;
+
+  const wall = ref.wall;
+  const sign = wallSurfaceSign(wall);
+  const center = wallPosition(room, wall);
+  const fraction = ref.side === "start" ? segment.start : segment.end;
+  const width = room.maxX - room.minX;
+  const depth = room.maxZ - room.minZ;
+
+  if (wall === "north" || wall === "south") {
+    const x = room.minX + fraction * width;
+    const z1 = center[2] + sign * fromDisplacement;
+    const z2 = center[2] + sign * toDisplacement;
+    const mid = (z1 + z2) / 2;
+    return {
+      ref,
+      wall,
+      segment,
+      length: Math.abs(z2 - z1),
+      position: [x, room.height / 2, mid],
+      rotationY: Math.PI / 2,
+      axis: "z",
+      midCoord: mid,
+      directionSign: Math.sign(z2 - z1) || 1,
+      fraction,
+      hasNeighbor: Boolean(neighbor),
+    };
+  }
+
+  const z = room.minZ + fraction * depth;
+  const x1 = center[0] + sign * fromDisplacement;
+  const x2 = center[0] + sign * toDisplacement;
+  const mid = (x1 + x2) / 2;
+  return {
+    ref,
+    wall,
+    segment,
+    length: Math.abs(x2 - x1),
+    position: [mid, room.height / 2, z],
+    rotationY: 0,
+    axis: "x",
+    midCoord: mid,
+    directionSign: Math.sign(x2 - x1) || 1,
+    fraction,
+    hasNeighbor: Boolean(neighbor),
+  };
+}
+
+function clampConnectorOffset(descriptor: WallConnectorDescriptor, offset: number, width: number) {
+  const half = width / 2;
+  return Math.min(descriptor.length / 2 - half, Math.max(-descriptor.length / 2 + half, offset));
+}
+
+function clampSegmentOffset(room: RoomBounds, wall: WallId, segment: WallSegment, offset: number, width: number) {
+  const length = wallAxisLength(room, wall);
+  const min = (segment.start - 0.5) * length + width / 2;
+  const max = (segment.end - 0.5) * length - width / 2;
+  if (max < min) return (min + max) / 2;
+  return Math.min(max, Math.max(min, offset));
+}
+
+function clampOpeningOffsetOnWallRun(
+  room: RoomBounds,
+  segmentation: WallSegmentation,
+  wall: WallId,
+  currentOffset: number,
+  nextOffset: number,
+  width: number,
+) {
+  const bounds = openingWallRunBounds(room, segmentation, wall, currentOffset);
+  if (!bounds) return clampWallOffset(room, wall, nextOffset, width);
+  const min = bounds.minOffset + width / 2;
+  const max = bounds.maxOffset - width / 2;
+  if (max < min) return (min + max) / 2;
+  return Math.min(max, Math.max(min, nextOffset));
+}
+
+function clampOpeningWidthOnWallRun(
+  room: RoomBounds,
+  segmentation: WallSegmentation,
+  wall: WallId,
+  currentOffset: number,
+  width: number,
+) {
+  const bounds = openingWallRunBounds(room, segmentation, wall, currentOffset);
+  if (!bounds) return clampOpeningWidth(room, wall, currentOffset, width);
+  const maxWidth = Math.max(0.25, 2 * Math.min(currentOffset - bounds.minOffset, bounds.maxOffset - currentOffset));
+  return Math.min(maxWidth, Math.max(0.25, width));
+}
+
+function openingWallRunBounds(
+  room: RoomBounds,
+  segmentation: WallSegmentation,
+  wall: WallId,
+  currentOffset: number,
+) {
+  const segments = segmentation[wall];
+  if (!segments.length) return null;
+  const center = wall === "north" || wall === "south"
+    ? (room.minX + room.maxX) / 2
+    : (room.minZ + room.maxZ) / 2;
+  const currentFraction = offsetToFraction(room, wall, currentOffset);
+  const index = segments.findIndex((segment) => currentFraction >= segment.start && currentFraction <= segment.end);
+  if (index === -1) return null;
+
+  const base = segments[index];
+  let startIndex = index;
+  let endIndex = index;
+
+  for (let scan = index - 1; scan >= 0; scan -= 1) {
+    if (Math.abs(segments[scan].displacement - base.displacement) > 0.001) break;
+    startIndex = scan;
+  }
+
+  for (let scan = index + 1; scan < segments.length; scan += 1) {
+    if (Math.abs(segments[scan].displacement - base.displacement) > 0.001) break;
+    endIndex = scan;
+  }
+
+  const startEndpoints = segmentWorldEndpoints(room, segmentation, wall, segments[startIndex]);
+  const endEndpoints = segmentWorldEndpoints(room, segmentation, wall, segments[endIndex]);
+  const minAlong = startEndpoints.start;
+  const maxAlong = endEndpoints.end;
+  return {
+    minOffset: minAlong - center,
+    maxOffset: maxAlong - center,
+  };
+}
+
+function clampOpeningWidth(room: RoomBounds, wall: WallId, offset: number, width: number) {
+  const length = wallAxisLength(room, wall);
+  const maxWidth = Math.max(0.25, 2 * (length / 2 - Math.abs(offset)));
+  return Math.min(maxWidth, Math.max(0.25, width));
+}
+
+function connectorOpeningPosition(descriptor: WallConnectorDescriptor, offset: number, y: number): Vec3 {
+  const shifted = descriptor.midCoord + descriptor.directionSign * offset;
+  return descriptor.axis === "z"
+    ? [descriptor.position[0], y, shifted]
+    : [shifted, y, descriptor.position[2]];
+}
+
+function setConnectorBoundaryFraction(
+  segmentation: WallSegmentation,
+  ref: WallConnectorRef,
+  fraction: number,
+): WallSegmentation {
+  const segments = segmentation[ref.wall];
+  const index = segments.findIndex((segment) => segment.id === ref.segmentId);
+  if (index === -1) return segmentation;
+  const segment = segments[index];
+  const previous = segments[index - 1];
+  const next = segments[index + 1];
+  const minGap = 0.05;
+
+  if (ref.side === "start") {
+    if (!previous) return segmentation;
+    const clamped = Math.min(segment.end - minGap, Math.max(previous.start + minGap, fraction));
+    const updated = segments.map((item, itemIndex) => {
+      if (itemIndex === index - 1) return { ...item, end: clamped };
+      if (itemIndex === index) return { ...item, start: clamped };
+      return item;
+    });
+    return { ...segmentation, [ref.wall]: updated };
+  }
+
+  if (!next) return segmentation;
+  const clamped = Math.min(next.end - minGap, Math.max(segment.start + minGap, fraction));
+  const updated = segments.map((item, itemIndex) => {
+    if (itemIndex === index) return { ...item, end: clamped };
+    if (itemIndex === index + 1) return { ...item, start: clamped };
+    return item;
+  });
+  return { ...segmentation, [ref.wall]: updated };
 }
 
 function wallOrientation(wall: WallId): { rotationY: number; normalSign: number } {
@@ -3900,13 +4724,19 @@ type DoorNodeProps = {
   hovered: boolean;
   opacity: number;
   onPointerDown: (event: ThreeEvent<PointerEvent>) => void;
+  onResizePointerDown: (event: ThreeEvent<PointerEvent>) => void;
   onPointerOver: () => void;
   onPointerOut: () => void;
 };
 
-function DoorNode({ door, room, wallSegments, selected, hovered, opacity, onPointerDown, onPointerOver, onPointerOut }: DoorNodeProps) {
-  const { rotationY } = wallOrientation(door.wall);
-  const position = openingWorldPos(room, door.wall, door.offset, door.height / 2, wallSegments[door.wall]);
+function DoorNode({ door, room, wallSegments, selected, hovered, opacity, onPointerDown, onResizePointerDown, onPointerOver, onPointerOut }: DoorNodeProps) {
+  const connector = door.connector
+    ? connectorDescriptor(room, wallSegments, door.connector)
+    : null;
+  const { rotationY } = connector ? { rotationY: connector.rotationY } : wallOrientation(door.wall);
+  const position = connector
+    ? connectorOpeningPosition(connector, door.offset, door.height / 2)
+    : openingWorldPos(room, door.wall, door.offset, door.height / 2, wallSegments[door.wall]);
   const frameColor = fadeSceneColor(SCENE_COLORS.doorFrame, opacity);
   const panelColor = fadeSceneColor(selected ? SCENE_COLORS.wallSelected : SCENE_COLORS.doorPanel, opacity);
   const highlight = selected || hovered;
@@ -3985,6 +4815,15 @@ function DoorNode({ door, room, wallSegments, selected, hovered, opacity, onPoin
           depthWrite={frameOpaque}
         />
       </mesh>
+      {selected ? (
+        <OpeningResizeHandles3D
+          width={door.width}
+          height={door.height}
+          depth={frameDepth}
+          opacity={opacity}
+          onPointerDown={onResizePointerDown}
+        />
+      ) : null}
     </group>
   );
 }
@@ -3997,14 +4836,20 @@ type WindowNodeProps = {
   hovered: boolean;
   opacity: number;
   onPointerDown: (event: ThreeEvent<PointerEvent>) => void;
+  onResizePointerDown: (event: ThreeEvent<PointerEvent>) => void;
   onPointerOver: () => void;
   onPointerOut: () => void;
 };
 
-function WindowNode({ window, room, wallSegments, selected, hovered, opacity, onPointerDown, onPointerOver, onPointerOut }: WindowNodeProps) {
-  const { rotationY } = wallOrientation(window.wall);
+function WindowNode({ window, room, wallSegments, selected, hovered, opacity, onPointerDown, onResizePointerDown, onPointerOver, onPointerOut }: WindowNodeProps) {
+  const connector = window.connector
+    ? connectorDescriptor(room, wallSegments, window.connector)
+    : null;
+  const { rotationY } = connector ? { rotationY: connector.rotationY } : wallOrientation(window.wall);
   const centerY = window.baseY + window.height / 2;
-  const position = openingWorldPos(room, window.wall, window.offset, centerY, wallSegments[window.wall]);
+  const position = connector
+    ? connectorOpeningPosition(connector, window.offset, centerY)
+    : openingWorldPos(room, window.wall, window.offset, centerY, wallSegments[window.wall]);
   const frameColor = fadeSceneColor(SCENE_COLORS.windowFrame, opacity);
   const glassColor = fadeSceneColor(selected ? SCENE_COLORS.wallSelected : SCENE_COLORS.windowGlass, opacity);
   const highlight = selected || hovered;
@@ -4094,6 +4939,62 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
           depthWrite={mullionOpaque}
         />
       </mesh>
+      {selected ? (
+        <OpeningResizeHandles3D
+          width={window.width}
+          height={window.height}
+          depth={frameDepth}
+          opacity={opacity}
+          onPointerDown={onResizePointerDown}
+        />
+      ) : null}
+    </group>
+  );
+}
+
+function OpeningResizeHandles3D({
+  width,
+  height,
+  depth,
+  opacity,
+  onPointerDown,
+}: {
+  width: number;
+  height: number;
+  depth: number;
+  opacity: number;
+  onPointerDown: (event: ThreeEvent<PointerEvent>) => void;
+}) {
+  const z = depth / 2 + 0.08;
+  const handles: Vec3[] = [
+    [-width / 2, 0, z],
+    [width / 2, 0, z],
+    [0, height / 2, z],
+  ];
+
+  return (
+    <group userData={{ captureHidden: true }}>
+      {handles.map((position, index) => (
+        <mesh
+          key={`${position[0]}-${position[1]}-${index}`}
+          position={position}
+          onPointerDown={(event) => {
+            event.stopPropagation();
+            onPointerDown(event);
+          }}
+        >
+          <boxGeometry args={[0.12, 0.12, 0.12]} />
+          <meshStandardMaterial
+            color={index === 2 ? SCENE_COLORS.axisY : SCENE_COLORS.axisX}
+            emissive={index === 2 ? SCENE_COLORS.axisY : SCENE_COLORS.axisX}
+            emissiveIntensity={0.25}
+            roughness={0.42}
+            transparent
+            opacity={0.95 * opacity}
+            depthWrite={opacity >= 0.98}
+          />
+        </mesh>
+      ))}
     </group>
   );
 }
@@ -4104,6 +5005,8 @@ const WALL_HIT_PAD = 0.1;
 type SegmentMeshProps = {
   wall: WallId;
   length: number;
+  hitLength: number;
+  hitOffset: Vec3;
   height: number;
   position: Vec3;
   opacity: number;
@@ -4118,6 +5021,8 @@ type SegmentMeshProps = {
 function SegmentMesh({
   wall,
   length,
+  hitLength,
+  hitOffset,
   height,
   position,
   opacity,
@@ -4134,8 +5039,8 @@ function SegmentMesh({
     : [WALL_THICKNESS, height, length];
   const outlineSize: Vec3 = [visibleSize[0] + 0.012, visibleSize[1] + 0.012, visibleSize[2] + 0.012];
   const hitSize: Vec3 = isHorizontal
-    ? [length + 0.36, height, WALL_HIT_PAD]
-    : [WALL_HIT_PAD, height, length + 0.36];
+    ? [hitLength + 0.36, height, WALL_HIT_PAD]
+    : [WALL_HIT_PAD, height, hitLength + 0.36];
   const highlighted = selected || hovered;
 
   return (
@@ -4144,30 +5049,34 @@ function SegmentMesh({
       onPointerOver={onPointerOver}
       onPointerOut={onPointerOut}
     >
-      <mesh castShadow receiveShadow onPointerDown={onPointerDown} renderOrder={0} userData={{ captureRole: "wall" }}>
-        <boxGeometry args={visibleSize} />
-        <meshStandardMaterial
-          color={selected ? SCENE_COLORS.wallSelected : SCENE_COLORS.wall}
-          transparent
-          opacity={(selected ? 0.92 : hovered ? 0.84 : 0.74) * opacity}
-          roughness={0.62}
-          emissive={highlighted ? SCENE_COLORS.wallSelected : SCENE_COLORS.wall}
-          emissiveIntensity={selected ? 0.2 : hovered ? 0.1 : 0.05}
-          depthWrite={opacity >= 0.98}
-        />
-      </mesh>
-      <mesh>
-        <boxGeometry args={outlineSize} />
-        <meshBasicMaterial
-          userData={{ captureHidden: true }}
-          color={highlighted ? SCENE_COLORS.wallSelectedEdge : SCENE_COLORS.wallEdge}
-          wireframe
-          transparent
-          opacity={(selected ? 0.65 : hovered ? 0.5 : 0.34) * opacity}
-          depthWrite={false}
-        />
-      </mesh>
-      <mesh onPointerDown={onPointerDown}>
+      {length >= 0.02 ? (
+        <>
+          <mesh castShadow receiveShadow onPointerDown={onPointerDown} renderOrder={0} userData={{ captureRole: "wall" }}>
+            <boxGeometry args={visibleSize} />
+            <meshStandardMaterial
+              color={selected ? SCENE_COLORS.wallSelected : SCENE_COLORS.wall}
+              transparent
+              opacity={(selected ? 0.92 : hovered ? 0.84 : 0.74) * opacity}
+              roughness={0.62}
+              emissive={highlighted ? SCENE_COLORS.wallSelected : SCENE_COLORS.wall}
+              emissiveIntensity={selected ? 0.2 : hovered ? 0.1 : 0.05}
+              depthWrite={opacity >= 0.98}
+            />
+          </mesh>
+          <mesh>
+            <boxGeometry args={outlineSize} />
+            <meshBasicMaterial
+              userData={{ captureHidden: true }}
+              color={highlighted ? SCENE_COLORS.wallSelectedEdge : SCENE_COLORS.wallEdge}
+              wireframe
+              transparent
+              opacity={(selected ? 0.65 : hovered ? 0.5 : 0.34) * opacity}
+              depthWrite={false}
+            />
+          </mesh>
+        </>
+      ) : null}
+      <mesh position={hitOffset} onPointerDown={onPointerDown}>
         <boxGeometry args={hitSize} />
         <meshBasicMaterial
           userData={{ captureHidden: true, cursorHighlight: highlightCursor }}
@@ -4187,18 +5096,23 @@ type ConnectorMeshProps = {
   position: Vec3;
   opacity: number;
   highlight: boolean;
+  onPointerDown?: (event: ThreeEvent<PointerEvent>) => void;
 };
 
-function ConnectorMesh({ wall, depth, height, position, opacity, highlight }: ConnectorMeshProps) {
+function ConnectorMesh({ wall, depth, height, position, opacity, highlight, onPointerDown }: ConnectorMeshProps) {
   const isHorizontal = wall === "north" || wall === "south";
+  const visibleDepth = Math.max(0.02, depth - WALL_THICKNESS);
   const visibleSize: Vec3 = isHorizontal
-    ? [WALL_THICKNESS, height, depth]
-    : [depth, height, WALL_THICKNESS];
+    ? [WALL_THICKNESS, height, visibleDepth]
+    : [visibleDepth, height, WALL_THICKNESS];
   const outlineSize: Vec3 = [visibleSize[0] + 0.012, visibleSize[1] + 0.012, visibleSize[2] + 0.012];
+  const hitSize: Vec3 = isHorizontal
+    ? [WALL_HIT_PAD, height, Math.max(depth, MIN_CONNECTOR_OPENING_LENGTH)]
+    : [Math.max(depth, MIN_CONNECTOR_OPENING_LENGTH), height, WALL_HIT_PAD];
 
   return (
     <group position={position}>
-      <mesh castShadow receiveShadow userData={{ captureRole: "wall" }}>
+      <mesh castShadow receiveShadow onPointerDown={onPointerDown} userData={{ captureRole: "wall" }}>
         <boxGeometry args={visibleSize} />
         <meshStandardMaterial
           color={highlight ? SCENE_COLORS.wallSelected : SCENE_COLORS.wall}
@@ -4218,6 +5132,15 @@ function ConnectorMesh({ wall, depth, height, position, opacity, highlight }: Co
           wireframe
           transparent
           opacity={0.34 * opacity}
+          depthWrite={false}
+        />
+      </mesh>
+      <mesh onPointerDown={onPointerDown}>
+        <boxGeometry args={hitSize} />
+        <meshBasicMaterial
+          userData={{ captureHidden: true }}
+          transparent
+          opacity={0}
           depthWrite={false}
         />
       </mesh>
@@ -4292,6 +5215,7 @@ type FurnitureNodeProps = {
   onSelect: () => void;
   onDragStart: (event: ThreeEvent<PointerEvent>) => void;
   onRotateStart: (event: ThreeEvent<PointerEvent>) => void;
+  onScaleStart: (axis: ShapeResizeAxis, sign: -1 | 1, event: ThreeEvent<PointerEvent>) => void;
   onTransformActiveChange: (active: boolean) => void;
   onChange: (instance: FurnitureInstance) => void;
   onMeasured?: (footprint: { width: number; depth: number; height: number }) => void;
@@ -4309,6 +5233,7 @@ function FurnitureNode({
   onSelect,
   onDragStart,
   onRotateStart,
+  onScaleStart,
   onTransformActiveChange,
   onChange,
   onMeasured,
@@ -4316,11 +5241,12 @@ function FurnitureNode({
   const groupRef = useRef<THREE.Group>(null);
   const transformMode = tool === "rotate" ? "rotate" : tool === "scale" ? "scale" : "translate";
   const modelUrl = asset?.modelUrl ? proxiedModelUrl(asset.modelUrl) : undefined;
+  const resizeSize = furnitureResizeHandleSize(asset);
 
   useFrame(() => {
     if (!groupRef.current || !selected) return;
     const object = groupRef.current;
-    const nextPosition = clampToFloor([object.position.x, object.position.y, object.position.z], room, wallSegments);
+    const nextPosition = clampToFloor([object.position.x, 0, object.position.z], room, wallSegments);
     if (
       nextPosition[0] !== object.position.x ||
       nextPosition[1] !== object.position.y ||
@@ -4333,9 +5259,10 @@ function FurnitureNode({
   function pushTransform() {
     const object = groupRef.current;
     if (!object) return;
+    const nextPosition = clampToFloor([object.position.x, 0, object.position.z], room, wallSegments);
     onChange({
       ...instance,
-      position: [object.position.x, object.position.y, object.position.z],
+      position: [nextPosition[0], 0, nextPosition[2]],
       rotation: [object.rotation.x, object.rotation.y, object.rotation.z],
       scale: [object.scale.x, object.scale.y, object.scale.z],
     });
@@ -4372,7 +5299,8 @@ function FurnitureNode({
           <PrimitiveFurniture primitive={asset?.primitive ?? "sofa"} selected={selected} hovered={hovered} opacity={opacity} />
         )}
       </Suspense>
-      {selected ? <FurnitureRotateRing onRotateStart={onRotateStart} /> : null}
+      {selected ? <FurnitureRotateRing size={resizeSize} scale={instance.scale} opacity={opacity} onRotateStart={onRotateStart} /> : null}
+      {selected ? <FurnitureScaleHandles size={resizeSize} scale={instance.scale} opacity={opacity} onScaleStart={onScaleStart} /> : null}
     </group>
   );
 
@@ -4427,7 +5355,8 @@ function ShapeNode({
   useFrame(() => {
     if (!groupRef.current || !selected) return;
     const object = groupRef.current;
-    const nextPosition = clampToFloor([object.position.x, object.position.y, object.position.z], room, wallSegments);
+    const nextY = groundedShapeY(shape.kind, object.scale.y);
+    const nextPosition = clampToFloor([object.position.x, nextY, object.position.z], room, wallSegments);
     if (
       nextPosition[0] !== object.position.x ||
       nextPosition[1] !== object.position.y ||
@@ -4665,6 +5594,11 @@ function ShapePrimitive({ shape, selected, hovered, opacity }: { shape: CustomSh
       {selected || hovered ? <SelectionRing opacity={opacity} selected={selected} /> : null}
     </group>
   );
+}
+
+function groundedShapeY(kind: CustomShape["kind"], scaleY: number) {
+  const safeScaleY = Math.max(0.05, Math.abs(scaleY));
+  return kind === "plane" ? safeScaleY * 0.02 : safeScaleY / 2;
 }
 
 function ShapeGeometry({ kind, color, opacity }: { kind: ShapeKind; color: string; opacity: number }) {
@@ -5007,25 +5941,33 @@ function SelectionRing({ opacity = 1, selected = true }: { opacity?: number; sel
   );
 }
 
-/**
- * Interactive grab ring at the base of a selected furniture instance.
- * Overlays the visual `SelectionRing` and dispatches the rotate gesture.
- * Slightly thicker than the visual ring so it's a comfortable hit target.
- */
 function FurnitureRotateRing({
+  size,
+  scale,
+  opacity,
   onRotateStart,
 }: {
+  size: Vec3;
+  scale: Vec3;
+  opacity: number;
   onRotateStart: (event: ThreeEvent<PointerEvent>) => void;
 }) {
+  const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
+    event.stopPropagation();
+    onRotateStart(event);
+  };
+  const safeScale = scale.map((value) => Math.max(0.05, Math.abs(value))) as Vec3;
+  const inverseScale: Vec3 = [1 / safeScale[0], 1 / safeScale[1], 1 / safeScale[2]];
+  const worldHeight = size[1] * safeScale[1];
+  const y = Math.max(0.72, worldHeight + 0.32) / safeScale[1];
+  const radius = Math.max(0.78, Math.max(size[0] * safeScale[0], size[2] * safeScale[2]) / 2 + 0.24);
+
   return (
-    <mesh
+    <group
       userData={{ captureHidden: true }}
-      rotation={[-Math.PI / 2, 0, 0]}
-      position={[0, 0.026, 0]}
-      onPointerDown={(event) => {
-        event.stopPropagation();
-        onRotateStart(event);
-      }}
+      position={[0, y, 0]}
+      scale={inverseScale}
+      onPointerDown={handlePointerDown}
       onPointerOver={(event) => {
         event.stopPropagation();
         document.body.style.cursor = "grab";
@@ -5034,9 +5976,85 @@ function FurnitureRotateRing({
         document.body.style.cursor = "";
       }}
     >
-      {/* Wider than the visual ring (0.78–0.97 vs 0.85–0.9) for easier grab. */}
-      <ringGeometry args={[0.78, 0.97, 48]} />
-      <meshBasicMaterial transparent opacity={0} depthWrite={false} />
-    </mesh>
+      <mesh rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[radius, 0.014, 8, 72]} />
+        <meshBasicMaterial color="#FFFFFF" transparent opacity={0.78 * opacity} depthWrite={false} />
+      </mesh>
+      <mesh position={[radius + 0.1, 0, 0]}>
+        <sphereGeometry args={[0.075, 18, 12]} />
+        <meshStandardMaterial
+          color="#FFFFFF"
+          emissive="#FFFFFF"
+          emissiveIntensity={0.18}
+          roughness={0.32}
+          transparent
+          opacity={0.96 * opacity}
+          depthWrite={opacity >= 0.98}
+        />
+      </mesh>
+      <mesh rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[radius, 0.08, 8, 72]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+      </mesh>
+    </group>
+  );
+}
+
+function FurnitureScaleHandles({
+  size,
+  scale,
+  opacity,
+  onScaleStart,
+}: {
+  size: Vec3;
+  scale: Vec3;
+  opacity: number;
+  onScaleStart: (axis: ShapeResizeAxis, sign: -1 | 1, event: ThreeEvent<PointerEvent>) => void;
+}) {
+  const safeScale = scale.map((value) => Math.max(0.05, Math.abs(value))) as Vec3;
+  const inverseScale: Vec3 = [1 / safeScale[0], 1 / safeScale[1], 1 / safeScale[2]];
+  const halfX = Math.max(0.36, size[0] / 2 + 0.16);
+  const halfY = Math.max(0.34, size[1] / 2 + 0.16);
+  const halfZ = Math.max(0.36, size[2] / 2 + 0.16);
+  const handles: Array<{ axis: ShapeResizeAxis; sign: -1 | 1; position: Vec3; color: string }> = [
+    { axis: 0, sign: -1, position: [-halfX, halfY * 0.52, 0], color: SCENE_COLORS.axisX },
+    { axis: 0, sign: 1, position: [halfX, halfY * 0.52, 0], color: SCENE_COLORS.axisX },
+    { axis: 1, sign: 1, position: [0, halfY * 2, 0], color: SCENE_COLORS.axisY },
+    { axis: 2, sign: -1, position: [0, halfY * 0.52, -halfZ], color: SCENE_COLORS.axisZ },
+    { axis: 2, sign: 1, position: [0, halfY * 0.52, halfZ], color: SCENE_COLORS.axisZ },
+  ];
+
+  return (
+    <group userData={{ captureHidden: true }}>
+      {handles.map((handle) => (
+        <mesh
+          key={`${handle.axis}-${handle.sign}`}
+          position={handle.position}
+          scale={inverseScale}
+          onPointerDown={(event) => {
+            event.stopPropagation();
+            onScaleStart(handle.axis, handle.sign, event);
+          }}
+          onPointerOver={(event) => {
+            event.stopPropagation();
+            document.body.style.cursor = "nwse-resize";
+          }}
+          onPointerOut={() => {
+            document.body.style.cursor = "";
+          }}
+        >
+          <boxGeometry args={[0.14, 0.14, 0.14]} />
+          <meshStandardMaterial
+            color={handle.color}
+            emissive={handle.color}
+            emissiveIntensity={0.24}
+            roughness={0.42}
+            transparent
+            opacity={0.94 * opacity}
+            depthWrite={opacity >= 0.98}
+          />
+        </mesh>
+      ))}
+    </group>
   );
 }
