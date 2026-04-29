@@ -273,6 +273,8 @@ const VIEWPORT_TOUCHES: OrbitControlsImpl["touches"] = {
   TWO: THREE.TOUCH.DOLLY_PAN,
 };
 
+const TRACKPAD_PIXEL_DELTA_THRESHOLD = 42;
+
 const FLOOR_PLANE = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const SPARK_SPLAT_BASE_QUATERNION = new THREE.Quaternion(1, 0, 0, 0);
 const SPLAT_IDENTITY_QUATERNION = new THREE.Quaternion();
@@ -777,7 +779,7 @@ function SceneContent({
 
     function handleTrackpadWheel(event: WheelEvent) {
       const controls = orbitControlsRef.current;
-      if (firstPersonActive || !controls?.enabled || event.ctrlKey) return;
+      if (firstPersonActive || !controls?.enabled || event.ctrlKey || !isTrackpadWheel(event)) return;
       if (
         shapeResizeRef.current ||
         shapeRotateRef.current ||
@@ -795,7 +797,7 @@ function SceneContent({
       const offset = new THREE.Vector3().subVectors(camera.position, target);
       const spherical = new THREE.Spherical().setFromVector3(offset);
       const rotateSpeed = 0.0032;
-      spherical.theta -= event.deltaX * rotateSpeed;
+      spherical.theta += event.deltaX * rotateSpeed;
       spherical.phi += event.deltaY * rotateSpeed;
       spherical.phi = THREE.MathUtils.clamp(spherical.phi, 0.08, Math.PI / 2.05);
       spherical.makeSafe();
@@ -809,7 +811,7 @@ function SceneContent({
     return () => {
       element.removeEventListener("wheel", handleTrackpadWheel, { capture: true });
     };
-  }, [camera, firstPersonActive, gl.domElement, viewMode]);
+  }, [camera, firstPersonActive, gl.domElement]);
 
   const projectPointerToFloor = useCallback(
     (clientX: number, clientY: number): Vec3 | null => {
@@ -1928,7 +1930,7 @@ function SceneContent({
         makeDefault
         enabled={!firstPersonControlsActive && !xrPresenting}
         maxPolarAngle={Math.PI / 2.05}
-        rotateSpeed={-1}
+        rotateSpeed={1}
         mouseButtons={VIEWPORT_MOUSE_BUTTONS}
         touches={VIEWPORT_TOUCHES}
       />
@@ -4988,6 +4990,12 @@ function fadedMaterialProps(opacity: number) {
     opacity,
     depthWrite: opacity >= 0.98,
   };
+}
+
+function isTrackpadWheel(event: WheelEvent) {
+  if (event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) return false;
+  if (Math.abs(event.deltaX) > 0) return true;
+  return Math.abs(event.deltaY) < TRACKPAD_PIXEL_DELTA_THRESHOLD;
 }
 
 function SelectionRing({ opacity = 1, selected = true }: { opacity?: number; selected?: boolean }) {
