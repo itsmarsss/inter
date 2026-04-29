@@ -4362,7 +4362,6 @@ function openingWallRunBounds(
 ) {
   const segments = segmentation[wall];
   if (!segments.length) return null;
-  const length = wallAxisLength(room, wall);
   const center = wall === "north" || wall === "south"
     ? (room.minX + room.maxX) / 2
     : (room.minZ + room.maxZ) / 2;
@@ -4386,8 +4385,8 @@ function openingWallRunBounds(
 
   const startEndpoints = segmentWorldEndpoints(room, segmentation, wall, segments[startIndex]);
   const endEndpoints = segmentWorldEndpoints(room, segmentation, wall, segments[endIndex]);
-  const minAlong = Math.max(center - length / 2, startEndpoints.start);
-  const maxAlong = Math.min(center + length / 2, endEndpoints.end);
+  const minAlong = startEndpoints.start;
+  const maxAlong = endEndpoints.end;
   return {
     minOffset: minAlong - center,
     maxOffset: maxAlong - center,

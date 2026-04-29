@@ -482,7 +482,7 @@ export function BlueprintView({
 
     if (openingDrag.mode !== "move") {
       const rawWidth = Math.abs((pointerAlong - openingDrag.startOffset) * 2);
-      const nextWidth = clampOpeningWidth(room, openingDrag.wall, openingDrag.startOffset, rawWidth);
+      const nextWidth = clampOpeningWidthOnWallRun(room, wallSegments, openingDrag.wall, openingDrag.startOffset, rawWidth);
 
       if (openingDrag.kind === "door" && onDoorsChange) {
         onDoorsChange(
@@ -499,7 +499,7 @@ export function BlueprintView({
     const nextOffset = clampOpeningOffsetOnWallRun(
       room,
       openingDrag.wall,
-      wallSegments?.[openingDrag.wall],
+      wallSegments,
       openingDrag.startOffset,
       pointerAlong - openingDrag.grabOffset,
       openingDrag.width,
@@ -1458,36 +1458,95 @@ function clampOpeningWidth(room: RoomBounds, wall: WallId, offset: number, width
 function clampOpeningOffsetOnWallRun(
   room: RoomBounds,
   wall: WallId,
-  segments: WallSegment[] | undefined,
+  wallSegments: WallSegmentation | undefined,
   currentOffset: number,
   nextOffset: number,
   width: number,
 ) {
+  const segments = wallSegments?.[wall];
   if (!segments?.length) return clampWallOffset(room, wall, nextOffset, width);
 
   const length = wall === "east" || wall === "west" ? room.maxZ - room.minZ : room.maxX - room.minX;
+  const center = wall === "north" || wall === "south"
+    ? (room.minX + room.maxX) / 2
+    : (room.minZ + room.maxZ) / 2;
   const currentFraction = Math.min(1, Math.max(0, currentOffset / length + 0.5));
   const index = segments.findIndex((segment) => currentFraction >= segment.start && currentFraction <= segment.end);
   if (index === -1) return clampWallOffset(room, wall, nextOffset, width);
 
   const base = segments[index];
-  let start = base.start;
-  let end = base.end;
+  let startIndex = index;
+  let endIndex = index;
 
   for (let scan = index - 1; scan >= 0; scan -= 1) {
     if (Math.abs(segments[scan].displacement - base.displacement) > 0.001) break;
-    start = segments[scan].start;
+    startIndex = scan;
   }
 
   for (let scan = index + 1; scan < segments.length; scan += 1) {
     if (Math.abs(segments[scan].displacement - base.displacement) > 0.001) break;
-    end = segments[scan].end;
+    endIndex = scan;
   }
 
-  const min = (start - 0.5) * length + width / 2;
-  const max = (end - 0.5) * length - width / 2;
+  const startLine = segmentLineCoords(wall, segments[startIndex], room, wallSegments);
+  const endLine = segmentLineCoords(wall, segments[endIndex], room, wallSegments);
+  const minOffset = (wall === "north" || wall === "south" ? startLine.x1 : startLine.y1) - center;
+  const maxOffset = (wall === "north" || wall === "south" ? endLine.x2 : endLine.y2) - center;
+  const min = minOffset + width / 2;
+  const max = maxOffset - width / 2;
   if (max < min) return (min + max) / 2;
   return Math.min(max, Math.max(min, nextOffset));
+}
+
+function clampOpeningWidthOnWallRun(
+  room: RoomBounds,
+  wallSegments: WallSegmentation | undefined,
+  wall: WallId,
+  currentOffset: number,
+  width: number,
+) {
+  const bounds = openingWallRunBounds(room, wallSegments, wall, currentOffset);
+  if (!bounds) return clampOpeningWidth(room, wall, currentOffset, width);
+  const maxWidth = Math.max(0.25, 2 * Math.min(currentOffset - bounds.minOffset, bounds.maxOffset - currentOffset));
+  return Math.min(maxWidth, Math.max(0.25, width));
+}
+
+function openingWallRunBounds(
+  room: RoomBounds,
+  wallSegments: WallSegmentation | undefined,
+  wall: WallId,
+  currentOffset: number,
+) {
+  const segments = wallSegments?.[wall];
+  if (!segments?.length) return null;
+  const length = wall === "east" || wall === "west" ? room.maxZ - room.minZ : room.maxX - room.minX;
+  const center = wall === "north" || wall === "south"
+    ? (room.minX + room.maxX) / 2
+    : (room.minZ + room.maxZ) / 2;
+  const currentFraction = Math.min(1, Math.max(0, currentOffset / length + 0.5));
+  const index = segments.findIndex((segment) => currentFraction >= segment.start && currentFraction <= segment.end);
+  if (index === -1) return null;
+
+  const base = segments[index];
+  let startIndex = index;
+  let endIndex = index;
+
+  for (let scan = index - 1; scan >= 0; scan -= 1) {
+    if (Math.abs(segments[scan].displacement - base.displacement) > 0.001) break;
+    startIndex = scan;
+  }
+
+  for (let scan = index + 1; scan < segments.length; scan += 1) {
+    if (Math.abs(segments[scan].displacement - base.displacement) > 0.001) break;
+    endIndex = scan;
+  }
+
+  const startLine = segmentLineCoords(wall, segments[startIndex], room, wallSegments);
+  const endLine = segmentLineCoords(wall, segments[endIndex], room, wallSegments);
+  return {
+    minOffset: (wall === "north" || wall === "south" ? startLine.x1 : startLine.y1) - center,
+    maxOffset: (wall === "north" || wall === "south" ? endLine.x2 : endLine.y2) - center,
+  };
 }
 
 function clampBlueprintDisplacement(value: number, room: RoomBounds, wall: WallId): number {
