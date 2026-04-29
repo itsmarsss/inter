@@ -54,9 +54,33 @@ export type FurnitureAsset = {
   createdAt: number;
   error?: string;
   primitive: "sofa" | "table" | "chair" | "lamp" | "plant" | "cabinet";
+  // LLM-estimated real-world length (longest physical dimension) in meters,
+  // used to scale the imported GLB to a believable size.
+  realLengthMeters?: number;
+  // Post-scale axis-aligned footprint of the loaded GLB, in meters. Reported
+  // by the 3D viewport once the model is measured so that 2D blueprint views
+  // can draw an accurate top-down bounding box instead of falling back to a
+  // primitive-shape guess.
+  footprint?: {
+    width: number;
+    depth: number;
+    height: number;
+  };
 };
 
 export type FurnitureAssetMap = Map<string, FurnitureAsset>;
+
+export type LibraryEntry = {
+  id: string;
+  name: string;
+  prompt: string;
+  primitive: FurnitureAsset["primitive"];
+  localModelPath: string;
+  localThumbPath?: string;
+  realLengthMeters?: number;
+  footprint?: { width: number; depth: number; height: number };
+  savedAt: number;
+};
 
 export type FurnitureInstance = {
   id: string;
@@ -91,6 +115,7 @@ export type Door = {
   id: string;
   name: string;
   wall: WallId;
+  connector?: WallConnectorRef;
   offset: number;
   width: number;
   height: number;
@@ -100,6 +125,7 @@ export type WindowOpening = {
   id: string;
   name: string;
   wall: WallId;
+  connector?: WallConnectorRef;
   offset: number;
   baseY: number;
   width: number;
@@ -115,6 +141,12 @@ export type WallSegment = {
 
 export type WallSegmentation = Record<WallId, WallSegment[]>;
 
+export type WallConnectorRef = {
+  wall: WallId;
+  segmentId: string;
+  side: "start" | "end";
+};
+
 export type SelectedRef =
   | { type: "wall"; id: WallId }
   | { type: "furniture"; id: string }
@@ -126,7 +158,7 @@ export type SelectedRef =
   | null;
 
 export type MarblePayload = {
-  model: "marble-1.1";
+  model: "marble-1.0-draft" | "marble-1.0" | "marble-1.1" | "marble-1.1-plus";
   world_prompt: {
     type: "image" | "multi-image" | "text";
     text_prompt: string;
@@ -184,6 +216,10 @@ export type MarbleResult = {
   spzUrl?: string;
   colliderMeshUrl?: string;
   error?: string;
+  /** 0..1 progress for the generation step. Optional; UI should fall back to status-based bands. */
+  progress?: number;
+  /** Estimated milliseconds remaining; only meaningful while `status === "generating"`. */
+  etaMs?: number;
 };
 
 export type CaptureImage = {

@@ -62,7 +62,6 @@ export function StatusBadge({ status }: { status: FurnitureStatus }) {
         color: badge.color,
         whiteSpace: "nowrap",
         flexShrink: 0,
-        animation: badge.pulse ? "pulse-opacity 1.4s ease-in-out infinite" : undefined,
         lineHeight: 1.4,
       }}
     >
