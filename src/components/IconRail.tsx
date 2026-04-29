@@ -1,10 +1,10 @@
 "use client";
 
-import { Box, Package, WandSparkles } from "lucide-react";
+import { Box, Package, PackageSearch, WandSparkles } from "lucide-react";
 import type { ComponentType } from "react";
 import { useState } from "react";
 
-export type RailSection = "objects" | "furniture" | "world";
+export type RailSection = "objects" | "furniture" | "products" | "world";
 
 const TOP_ITEMS: Array<{
   id: RailSection;
@@ -13,6 +13,7 @@ const TOP_ITEMS: Array<{
 }> = [
   { id: "objects", label: "Objects", icon: Box },
   { id: "furniture", label: "Furniture", icon: Package },
+  { id: "products", label: "Product Search", icon: PackageSearch },
   { id: "world", label: "World Generation", icon: WandSparkles },
 ];
 

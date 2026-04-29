@@ -34,6 +34,7 @@
   --grid-axis-x: rgba(60, 160, 80, 0.45);
   --grid-axis-z: rgba(180, 60, 60, 0.45);
 
-  --font-ui:   var(--font-plex-sans, 'IBM Plex Sans'), sans-serif;
-  --font-mono: var(--font-plex-mono, 'IBM Plex Mono'), monospace;
+  --font-ui:      var(--font-plex-mono, 'IBM Plex Mono'), monospace;
+  --font-mono:    var(--font-plex-mono, 'IBM Plex Mono'), monospace;
+  --font-display: var(--font-bebas, 'Bebas Neue'), 'Arial Narrow', sans-serif;
 }

@@ -2,7 +2,7 @@
 
 ## Intent
 
-Marble Studio uses a matte graphite workspace with warm ivory type and muted clay accents. The interface should feel like a compact creative tool: quiet surfaces, readable controls, restrained contrast, and one clear action color.
+INTER uses a matte graphite workspace with warm ivory type and muted clay accents. The interface should feel like a compact creative tool: quiet surfaces, readable controls, restrained contrast, and one clear action color.
 
 ## Tokens
 

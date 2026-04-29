@@ -137,6 +137,72 @@ export function clampToRoom(position: Vec3, room: RoomBounds, margin = 0.35): Ve
   ];
 }
 
+/**
+ * Clamps a position to the actual segmented floor boundary using polygon
+ * projection. Builds an inset floor polygon (adding margin to each segment
+ * displacement), checks point-in-polygon, and if outside projects to the
+ * nearest edge. This avoids the discontinuities caused by per-axis clamping
+ * at segment boundaries.
+ */
+export function clampToFloor(
+  position: Vec3,
+  room: RoomBounds,
+  wallSegments?: WallSegmentation,
+  margin = 0.35,
+): Vec3 {
+  if (!wallSegments) return clampToRoom(position, room, margin);
+
+  // Build an inset version of the floor polygon by shrinking each wall inward
+  // by the margin (adding margin to displacement moves the wall inward for
+  // all four walls, since positive displacement = inward for all of them).
+  const inset: WallSegmentation = {
+    north: wallSegments.north.map((s) => ({ ...s, displacement: s.displacement + margin })),
+    east:  wallSegments.east.map((s)  => ({ ...s, displacement: s.displacement + margin })),
+    south: wallSegments.south.map((s) => ({ ...s, displacement: s.displacement + margin })),
+    west:  wallSegments.west.map((s)  => ({ ...s, displacement: s.displacement + margin })),
+  };
+  const polygon = buildFloorPolygon(room, inset);
+  if (polygon.length < 3) return clampToRoom(position, room, margin);
+
+  const px = position[0];
+  const pz = position[2];
+
+  // Ray-cast point-in-polygon test.
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].x, zi = polygon[i].z;
+    const xj = polygon[j].x, zj = polygon[j].z;
+    if ((zi > pz) !== (zj > pz) && px < ((xj - xi) * (pz - zi)) / (zj - zi) + xi) {
+      inside = !inside;
+    }
+  }
+  if (inside) return position;
+
+  // Project onto the nearest polygon edge.
+  let bestDist = Infinity;
+  let bestX = px;
+  let bestZ = pz;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const ax = polygon[j].x, az = polygon[j].z;
+    const bx = polygon[i].x, bz = polygon[i].z;
+    const abx = bx - ax, abz = bz - az;
+    const len2 = abx * abx + abz * abz;
+    if (len2 < 1e-10) continue;
+    const t = Math.max(0, Math.min(1, ((px - ax) * abx + (pz - az) * abz) / len2));
+    const nx = ax + t * abx;
+    const nz = az + t * abz;
+    const dx = nx - px, dz = nz - pz;
+    const dist = dx * dx + dz * dz;
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestX = nx;
+      bestZ = nz;
+    }
+  }
+
+  return [bestX, position[1], bestZ];
+}
+
 export function moveWall(room: RoomBounds, wall: WallId, value: number): RoomBounds {
   const next = { ...room };
 
@@ -277,6 +343,135 @@ export function clampWindowVerticalOffset(room: RoomBounds, baseY: number, heigh
   return Math.min(room.height - height - 0.05, Math.max(0.1, baseY));
 }
 
+export function clampOpeningsToLayout(
+  room: RoomBounds,
+  wallSegments: WallSegmentation,
+  doors: Door[],
+  windows: WindowOpening[],
+) {
+  return {
+    doors: doors.map((door) => clampDoorToLayout(room, wallSegments, door)),
+    windows: windows.map((window) => clampWindowToLayout(room, wallSegments, window)),
+  };
+}
+
+function clampDoorToLayout(room: RoomBounds, wallSegments: WallSegmentation, door: Door): Door {
+  const bounds = openingBoundsForLayout(room, wallSegments, door);
+  const { width, offset } = clampOpeningToBounds(bounds, door.width, door.offset);
+  return {
+    ...door,
+    connector: bounds.connectorValid ? door.connector : undefined,
+    width,
+    offset,
+  };
+}
+
+function clampWindowToLayout(
+  room: RoomBounds,
+  wallSegments: WallSegmentation,
+  window: WindowOpening,
+): WindowOpening {
+  const bounds = openingBoundsForLayout(room, wallSegments, window);
+  const { width, offset } = clampOpeningToBounds(bounds, window.width, window.offset);
+  return {
+    ...window,
+    connector: bounds.connectorValid ? window.connector : undefined,
+    width,
+    offset,
+    baseY: clampWindowVerticalOffset(room, window.baseY, window.height),
+  };
+}
+
+function clampOpeningToBounds(bounds: OpeningLayoutBounds, width: number, offset: number) {
+  const span = Math.max(0.25, bounds.maxOffset - bounds.minOffset);
+  const nextWidth = Math.min(Math.max(0.25, width), span);
+  const min = bounds.minOffset + nextWidth / 2;
+  const max = bounds.maxOffset - nextWidth / 2;
+  const nextOffset = max < min ? (bounds.minOffset + bounds.maxOffset) / 2 : Math.min(max, Math.max(min, offset));
+  return { width: nextWidth, offset: nextOffset };
+}
+
+type OpeningLayoutBounds = {
+  minOffset: number;
+  maxOffset: number;
+  connectorValid: boolean;
+};
+
+function openingBoundsForLayout(
+  room: RoomBounds,
+  wallSegments: WallSegmentation,
+  opening: Door | WindowOpening,
+): OpeningLayoutBounds {
+  if (opening.connector) {
+    const connectorLength = connectorOpeningLength(wallSegments, opening.connector);
+    if (connectorLength !== null) {
+      return {
+        minOffset: -connectorLength / 2,
+        maxOffset: connectorLength / 2,
+        connectorValid: true,
+      };
+    }
+  }
+
+  const run = openingWallRunBounds(room, wallSegments, opening.wall, opening.offset);
+  return {
+    minOffset: run?.minOffset ?? -wallAxisLength(room, opening.wall) / 2,
+    maxOffset: run?.maxOffset ?? wallAxisLength(room, opening.wall) / 2,
+    connectorValid: false,
+  };
+}
+
+function connectorOpeningLength(segmentation: WallSegmentation, ref: NonNullable<Door["connector"]>) {
+  const segments = segmentation[ref.wall];
+  const index = segments.findIndex((segment) => segment.id === ref.segmentId);
+  if (index === -1) return null;
+
+  const segment = segments[index];
+  const neighbor = ref.side === "start" ? segments[index - 1] : segments[index + 1];
+  if (!neighbor && segment.displacement >= -0.001) return null;
+
+  const fromDisplacement = ref.side === "start"
+    ? neighbor?.displacement ?? 0
+    : segment.displacement;
+  const toDisplacement = ref.side === "start"
+    ? segment.displacement
+    : neighbor?.displacement ?? 0;
+  const length = Math.abs(toDisplacement - fromDisplacement);
+  return length > 0.001 ? length : null;
+}
+
+function openingWallRunBounds(
+  room: RoomBounds,
+  segmentation: WallSegmentation,
+  wall: WallId,
+  currentOffset: number,
+) {
+  const segments = segmentation[wall];
+  if (!segments.length) return null;
+  const currentFraction = offsetToFraction(room, wall, currentOffset);
+  const index = segments.findIndex((segment) => currentFraction >= segment.start && currentFraction <= segment.end);
+  if (index === -1) return null;
+
+  const base = segments[index];
+  let startIndex = index;
+  let endIndex = index;
+
+  for (let scan = index - 1; scan >= 0; scan -= 1) {
+    if (Math.abs(segments[scan].displacement - base.displacement) > 0.001) break;
+    startIndex = scan;
+  }
+
+  for (let scan = index + 1; scan < segments.length; scan += 1) {
+    if (Math.abs(segments[scan].displacement - base.displacement) > 0.001) break;
+    endIndex = scan;
+  }
+
+  return {
+    minOffset: fractionToOffset(room, wall, segments[startIndex].start),
+    maxOffset: fractionToOffset(room, wall, segments[endIndex].end),
+  };
+}
+
 export function createInitialDoor(room: RoomBounds): Door {
   const width = Math.min(0.9, Math.max(0.65, (room.maxX - room.minX) * 0.16));
   const height = Math.min(2.05, Math.max(1.75, room.height * 0.74));
@@ -292,7 +487,10 @@ export function createInitialDoor(room: RoomBounds): Door {
 }
 
 export function createDoor(room: RoomBounds, wall: WallId = "south"): Door {
-  const width = Math.min(0.9, Math.max(0.65, wallAxisLength(room, wall) * 0.16));
+  // Doors are a fixed physical size (~0.9m wide); only shrink if the wall is
+  // genuinely too short to fit one. Don't scale proportionally with wall length.
+  const STANDARD_DOOR_WIDTH = 0.9;
+  const width = Math.min(STANDARD_DOOR_WIDTH, wallAxisLength(room, wall) * 0.9);
   const height = Math.min(2.05, Math.max(1.75, room.height * 0.74));
   return {
     id: createId(),
@@ -471,7 +669,47 @@ export function buildFloorPolygon(
     }
   }
 
-  return points;
+  return orthogonalizeFloorPolygon(points);
+}
+
+function orthogonalizeFloorPolygon(points: FloorPoint[]): FloorPoint[] {
+  if (points.length < 2) return points;
+
+  const EPS = 1e-4;
+  const output: FloorPoint[] = [];
+  const pushPoint = (point: FloorPoint) => {
+    const last = output[output.length - 1];
+    if (last && Math.abs(last.x - point.x) < EPS && Math.abs(last.z - point.z) < EPS) return;
+    output.push(point);
+  };
+
+  const isHorizontal = (a: FloorPoint, b: FloorPoint) => Math.abs(a.z - b.z) < EPS;
+  const isVertical = (a: FloorPoint, b: FloorPoint) => Math.abs(a.x - b.x) < EPS;
+
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index];
+    const next = points[(index + 1) % points.length];
+    pushPoint(current);
+
+    if (isHorizontal(current, next) || isVertical(current, next)) continue;
+
+    const previous = points[(index - 1 + points.length) % points.length];
+    const enteringHorizontally = isHorizontal(previous, current);
+    const corner = enteringHorizontally
+      ? { x: next.x, z: current.z }
+      : { x: current.x, z: next.z };
+    pushPoint(corner);
+  }
+
+  if (output.length > 1) {
+    const first = output[0];
+    const last = output[output.length - 1];
+    if (Math.abs(first.x - last.x) < EPS && Math.abs(first.z - last.z) < EPS) {
+      output.pop();
+    }
+  }
+
+  return output;
 }
 
 function inferPrimitive(prompt: string): FurnitureAsset["primitive"] {
