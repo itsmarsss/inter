@@ -25,6 +25,7 @@ import { IconRail, type RailSection } from "./IconRail";
 import { MinimapPanel } from "./MinimapPanel";
 import { ModeBar, type ViewMode } from "./ModeBar";
 import { ObjectsPanel } from "./ObjectsPanel";
+import { ProductSearchPanel } from "./ProductSearchPanel";
 import { Viewport } from "./Viewport";
 import { WorldPanel } from "./WorldPanel";
 
@@ -89,6 +90,7 @@ export function PrecisionLayout({
   doors,
   windows,
   wallSegments,
+  assetById,
   room,
   tool,
   selected,
@@ -227,6 +229,19 @@ export function PrecisionLayout({
             onUploadModel={onUploadModel}
             onSaveAsset={onSaveAsset}
             onDeleteLibraryEntry={onDeleteLibraryEntry}
+            onClose={() => setPanelOpen(false)}
+          />
+        </div>
+      </div>
+
+      <div style={wrapperStyleFor("ui-from-left", 80, entering, preHidden)}>
+        <div style={{ pointerEvents: "auto" }}>
+          <ProductSearchPanel
+            open={panelOpen && activeSection === "products"}
+            assets={furnitureAssets}
+            instances={furnitureInstances}
+            assetById={assetById}
+            libraryEntries={libraryEntries}
             onClose={() => setPanelOpen(false)}
           />
         </div>

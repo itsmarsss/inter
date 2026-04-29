@@ -3620,7 +3620,14 @@ function useXrPresentingExternal() {
  */
 function SplatOverlayControls() {
   const xrPresenting = useXrPresentingExternal();
-  return xrPresenting ? <SplatVrHint /> : <SplatWalkHint />;
+  return xrPresenting ? (
+    <SplatVrHint />
+  ) : (
+    <>
+      <EnterVrButton />
+      <SplatWalkHint />
+    </>
+  );
 }
 
 function SplatVrHint() {
