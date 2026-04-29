@@ -58,7 +58,6 @@ export function MarbleBadge({ status }: { status: MarbleResult["status"] }) {
         whiteSpace: "nowrap",
         flexShrink: 0,
         lineHeight: 1.4,
-        animation: cfg.pulse ? "pulse-opacity 1.4s ease-in-out infinite" : undefined,
       }}
     >
       {cfg.label}
