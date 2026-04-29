@@ -3,7 +3,18 @@ import { Canvas, type ThreeEvent, useFrame, useThree } from "@react-three/fiber"
 import { Grid, Html, OrbitControls, PerspectiveCamera, TransformControls, useGLTF } from "@react-three/drei";
 import { XR, XROrigin, createXRStore, useXR, useXRControllerLocomotion } from "@react-three/xr";
 import { Camera, Minus, SlidersHorizontal } from "lucide-react";
-import { Component, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import {
+  Component,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import * as THREE from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import {
