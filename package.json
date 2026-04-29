@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.4.1",
+    "@google/genai": "^1.50.1",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.4.0",
     "@react-three/xr": "^6.6.29",
