@@ -1,40 +1,18 @@
 "use client";
 
-import { Map, Maximize2, Minus } from "lucide-react";
+import { Map, Maximize2 } from "lucide-react";
 import { type ReactNode, useState } from "react";
-import type { FurnitureInstance, RoomBounds } from "../state/types";
 import { roomDimensions } from "../state/editor";
+import type { RoomBounds } from "../state/types";
 
 type MinimapPanelProps = {
   room: RoomBounds;
-  instances: FurnitureInstance[];
+  blueprint: ReactNode;
+  onExpand?: () => void;
 };
 
-const SVG_W = 210;
-const SVG_H = 160;
-const PAD_X = 22;
-const PAD_Y = 18;
-
-export function MinimapPanel({ room, instances }: MinimapPanelProps) {
+export function MinimapPanel({ room, blueprint, onExpand }: MinimapPanelProps) {
   const dims = roomDimensions(room);
-
-  const roomW = room.maxX - room.minX;
-  const roomD = room.maxZ - room.minZ;
-  const usableW = SVG_W - PAD_X * 2;
-  const usableH = SVG_H - PAD_Y * 2;
-  const scale = Math.min(usableW / roomW, usableH / roomD) * 0.92;
-
-  const drawW = roomW * scale;
-  const drawH = roomD * scale;
-  const originX = SVG_W / 2 - drawW / 2;
-  const originY = SVG_H / 2 - drawH / 2;
-
-  function toSvgX(wx: number) {
-    return originX + (wx - room.minX) * scale;
-  }
-  function toSvgY(wz: number) {
-    return originY + (wz - room.minZ) * scale;
-  }
 
   return (
     <div
@@ -42,158 +20,74 @@ export function MinimapPanel({ room, instances }: MinimapPanelProps) {
         position: "absolute",
         top: 12,
         right: 12,
-        width: 210,
-        background: "var(--surface-raised)",
-        border: "1px solid var(--border-dim)",
-        borderRadius: 7,
+        width: 240,
+        background: "#16181d",
+        border: "1px solid var(--border-mid)",
+        borderRadius: 6,
         overflow: "hidden",
         zIndex: 15,
         pointerEvents: "auto",
+        boxShadow: "0 8px 24px rgba(0, 0, 0, 0.5)",
+        fontFamily: "var(--font-ui)",
       }}
     >
       <div
         style={{
-          height: 36,
+          height: 32,
           padding: "0 10px",
           display: "flex",
           alignItems: "center",
-          gap: 6,
+          gap: 8,
           borderBottom: "1px solid var(--border-dim)",
         }}
       >
-        <Map size={12} strokeWidth={1.5} color="var(--text-secondary)" />
+        <Map size={11} strokeWidth={1.6} color="var(--accent-text)" />
         <span
           style={{
-            fontSize: 12,
+            fontSize: 11,
             fontWeight: 500,
             color: "var(--text-bright)",
             flex: 1,
-            fontFamily: "var(--font-ui)",
+            letterSpacing: "0.02em",
           }}
         >
           Blueprint
         </span>
-        <HeaderBtn icon={<Minus size={10} strokeWidth={1.5} />} label="Minimize" />
-        <HeaderBtn icon={<Maximize2 size={10} strokeWidth={1.5} />} label="Expand" />
-      </div>
-
-      {/* Parchment canvas */}
-      <div
-        style={{
-          background: "#ede8dc",
-          aspectRatio: "4/3",
-          position: "relative",
-        }}
-      >
-        <svg
-          width="100%"
-          height="100%"
-          viewBox={`0 0 ${SVG_W} ${SVG_H}`}
-          style={{ display: "block" }}
-        >
-          {/* Room perimeter */}
-          <rect
-            x={originX}
-            y={originY}
-            width={drawW}
-            height={drawH}
-            fill="none"
-            stroke="#b8a88a"
-            strokeWidth="1.5"
-          />
-
-          {/* Furniture footprints */}
-          {instances.slice(0, 12).map((inst) => {
-            const fx = toSvgX(inst.position[0]);
-            const fz = toSvgY(inst.position[2]);
-            const fw = Math.max(8, inst.scale[0] * scale * 2);
-            const fd = Math.max(6, inst.scale[2] * scale * 2);
-            return (
-              <rect
-                key={inst.id}
-                x={fx - fw / 2}
-                y={fz - fd / 2}
-                width={fw}
-                height={fd}
-                fill="#c8b49a"
-                opacity={0.65}
-                rx={1}
-              />
-            );
-          })}
-
-          {/* Width dimension */}
-          <line
-            x1={originX}
-            y1={originY - 8}
-            x2={originX + drawW}
-            y2={originY - 8}
-            stroke="#b8a88a"
-            strokeWidth="0.5"
-            strokeDasharray="2 2"
-          />
-          <line x1={originX} y1={originY - 10} x2={originX} y2={originY - 6} stroke="#b8a88a" strokeWidth="0.5" />
-          <line x1={originX + drawW} y1={originY - 10} x2={originX + drawW} y2={originY - 6} stroke="#b8a88a" strokeWidth="0.5" />
-          <text
-            x={originX + drawW / 2}
-            y={originY - 11}
-            textAnchor="middle"
-            fontFamily="IBM Plex Mono, monospace"
-            fontSize="6"
-            fill="#8a7860"
-          >
-            {dims.width.toFixed(1)} m
-          </text>
-
-          {/* Depth dimension */}
-          <line
-            x1={originX + drawW + 8}
-            y1={originY}
-            x2={originX + drawW + 8}
-            y2={originY + drawH}
-            stroke="#b8a88a"
-            strokeWidth="0.5"
-            strokeDasharray="2 2"
-          />
-          <text
-            x={originX + drawW + 15}
-            y={originY + drawH / 2}
-            textAnchor="middle"
-            fontFamily="IBM Plex Mono, monospace"
-            fontSize="6"
-            fill="#8a7860"
-            transform={`rotate(90, ${originX + drawW + 15}, ${originY + drawH / 2})`}
-          >
-            {dims.depth.toFixed(1)} m
-          </text>
-        </svg>
-
-        <div
+        <span
           style={{
-            position: "absolute",
-            bottom: 4,
-            right: 5,
-            color: "#b8a88a",
-            fontSize: 11,
-            lineHeight: 1,
-            userSelect: "none",
-            cursor: "nwse-resize",
+            fontSize: 10,
+            color: "var(--text-secondary)",
             fontFamily: "var(--font-mono)",
+            letterSpacing: "0.02em",
           }}
         >
-          ⌟
-        </div>
+          {dims.width.toFixed(1)} × {dims.depth.toFixed(1)} m
+        </span>
+        <HeaderBtn icon={<Maximize2 size={10} strokeWidth={1.6} />} label="Expand" onClick={onExpand} />
+      </div>
+
+      <div
+        style={{
+          aspectRatio: "4/3",
+          background: "var(--surface-input)",
+          position: "relative",
+          overflow: "hidden",
+        }}
+      >
+        {blueprint}
       </div>
     </div>
   );
 }
 
-function HeaderBtn({ icon, label }: { icon: ReactNode; label: string }) {
+function HeaderBtn({ icon, label, onClick }: { icon: ReactNode; label: string; onClick?: () => void }) {
   const [hovered, setHovered] = useState(false);
   return (
     <button
       type="button"
       aria-label={label}
+      title={label}
+      onClick={onClick}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
@@ -201,8 +95,8 @@ function HeaderBtn({ icon, label }: { icon: ReactNode; label: string }) {
         height: 20,
         borderRadius: 3,
         border: "none",
-        background: hovered ? "rgba(255,255,255,0.07)" : "transparent",
-        color: hovered ? "var(--text-primary)" : "var(--text-secondary)",
+        background: hovered ? "var(--surface-overlay)" : "transparent",
+        color: hovered ? "var(--text-bright)" : "var(--text-secondary)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",

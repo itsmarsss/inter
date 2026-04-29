@@ -2,15 +2,16 @@
 
 import { useState } from "react";
 
-const MODES = ["Blockout", "Block", "Blend", "Splat"] as const;
+const MODES = ["Block", "Splat"] as const;
 export type ViewMode = (typeof MODES)[number];
 
 type ModeBarProps = {
   activeMode: ViewMode;
   onModeChange: (mode: ViewMode) => void;
+  splatAvailable: boolean;
 };
 
-export function ModeBar({ activeMode, onModeChange }: ModeBarProps) {
+export function ModeBar({ activeMode, onModeChange, splatAvailable }: ModeBarProps) {
   return (
     <div
       style={{
@@ -24,22 +25,36 @@ export function ModeBar({ activeMode, onModeChange }: ModeBarProps) {
     >
       <div
         style={{
-          background: "var(--surface-raised)",
-          border: "1px solid var(--border-dim)",
+          background: "#16181d",
+          border: "1px solid var(--border-mid)",
           borderRadius: 8,
           padding: 3,
           display: "flex",
           gap: 1,
+          boxShadow: "0 6px 20px rgba(0, 0, 0, 0.45)",
         }}
       >
-        {MODES.map((mode) => (
-          <ModeButton
-            key={mode}
-            label={mode}
-            active={activeMode === mode}
-            onClick={() => onModeChange(mode)}
-          />
-        ))}
+        {MODES.map((mode) => {
+          const disabled = mode === "Splat" && !splatAvailable;
+          return (
+            <ModeButton
+              key={mode}
+              label={mode}
+              active={activeMode === mode}
+              disabled={disabled}
+              title={
+                disabled
+                  ? "Generate a world to view the gaussian splat"
+                  : mode === "Block"
+                  ? "Show the blockout 3D model"
+                  : "Show the generated gaussian splat"
+              }
+              onClick={() => {
+                if (!disabled) onModeChange(mode);
+              }}
+            />
+          );
+        })}
       </div>
     </div>
   );
@@ -48,10 +63,14 @@ export function ModeBar({ activeMode, onModeChange }: ModeBarProps) {
 function ModeButton({
   label,
   active,
+  disabled,
+  title,
   onClick,
 }: {
   label: string;
   active: boolean;
+  disabled: boolean;
+  title: string;
   onClick: () => void;
 }) {
   const [hovered, setHovered] = useState(false);
@@ -60,6 +79,9 @@ function ModeButton({
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-label={title}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
@@ -67,13 +89,20 @@ function ModeButton({
         borderRadius: 5,
         fontSize: 12,
         fontFamily: "var(--font-ui)",
-        fontWeight: 400,
+        fontWeight: 500,
         border: "none",
-        cursor: "pointer",
+        cursor: disabled ? "not-allowed" : "pointer",
         letterSpacing: "0.01em",
-        background: active ? "var(--surface-overlay)" : "transparent",
-        color: active ? "var(--text-bright)" : hovered ? "var(--text-primary)" : "var(--text-secondary)",
+        background: active ? "var(--accent-dim)" : "transparent",
+        color: disabled
+          ? "var(--text-ghost)"
+          : active
+          ? "var(--accent-text)"
+          : hovered
+          ? "var(--text-bright)"
+          : "var(--text-primary)",
         transition: "background 100ms, color 100ms",
+        opacity: disabled ? 0.55 : 1,
       }}
     >
       {label}

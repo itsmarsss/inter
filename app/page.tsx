@@ -22,27 +22,20 @@ export default function HomePage() {
     if (triggered.current) return;
     triggered.current = true;
 
-    // Start the grid tilt
     setPhase("tilting");
-
-    // After tilt (1400ms) + small buffer: crossfade to editor
     setTimeout(() => setPhase("revealing"), 1450);
-
-    // After crossfade (500ms): trigger sidebar slide-in
     setTimeout(() => setPhase("entering"), 1950);
-
-    // After sidebars done (550ms): fully active
     setTimeout(() => setPhase("editor"), 2600);
   }, []);
 
-  // Mount editor early so Three.js / shaders are compiled during landing
+  // Mount the editor early so Three.js/shaders are warm by the time we reveal.
   const [editorMounted, setEditorMounted] = useState(false);
   useEffect(() => {
     const t = setTimeout(() => setEditorMounted(true), 400);
     return () => clearTimeout(t);
   }, []);
 
-  // Keep landing mounted through "revealing" so its fade-out transition can play
+  // Keep landing mounted through "revealing" so its fade-out can play.
   const showLanding = phase === "landing" || phase === "tilting" || phase === "revealing";
   const landingOpacity = phase === "revealing" ? 0 : 1;
   const editorOpacity = phase === "landing" || phase === "tilting" ? 0 : 1;
@@ -58,13 +51,11 @@ export default function HomePage() {
         background: "#090a0c",
       }}
     >
-      {/* ── Editor ─────────────────────────────────────────────────────────── */}
       {editorMounted && (
         <div
           style={{
             position: "absolute",
             inset: 0,
-            // Fade in when revealing; no transition while landing (stays hidden)
             transition: phase === "revealing" ? "opacity 0.5s ease" : "none",
             opacity: editorOpacity,
             pointerEvents: phase === "editor" ? "auto" : "none",
@@ -74,20 +65,18 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* ── Landing page (tilt + zoom) ──────────────────────────────────────── */}
       {showLanding && (
         <div
           style={{
             position: "absolute",
             inset: 0,
             zIndex: 10,
-            // Fade out simultaneously with editor fade-in
             transition: phase === "revealing" ? "opacity 0.5s ease" : "none",
             opacity: landingOpacity,
             pointerEvents: phase === "tilting" ? "none" : "auto",
           }}
         >
-          {/* isTilting stays true through "revealing" so grid remains at floor angle while fading */}
+          {/* isTilting stays true through "revealing" so the grid stays at floor angle while fading */}
           <LandingPage
             isTilting={phase === "tilting" || phase === "revealing"}
             onEnter={handleEnter}

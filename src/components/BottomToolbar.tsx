@@ -1,14 +1,14 @@
 "use client";
 
-import { Wand2 } from "lucide-react";
+import { WandSparkles } from "lucide-react";
 import { useState } from "react";
 
 type BottomToolbarProps = {
-  panelOpen: boolean;
-  onTogglePanel: () => void;
+  worldActive: boolean;
+  onOpenWorld: () => void;
 };
 
-export function BottomToolbar({ panelOpen, onTogglePanel }: BottomToolbarProps) {
+export function BottomToolbar({ worldActive, onOpenWorld }: BottomToolbarProps) {
   const [hovered, setHovered] = useState(false);
 
   return (
@@ -34,27 +34,28 @@ export function BottomToolbar({ panelOpen, onTogglePanel }: BottomToolbarProps) 
       >
         <button
           type="button"
-          aria-label={panelOpen ? "Hide generate panel" : "Show generate panel"}
+          aria-label="Open world generation"
+          title="World Generation"
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
-          onClick={onTogglePanel}
+          onClick={onOpenWorld}
           style={{
             width: 28,
             height: 28,
             borderRadius: "50%",
-            background: panelOpen
+            background: worldActive
               ? "var(--accent-dim)"
               : hovered
               ? "var(--surface-overlay)"
               : "var(--surface-input)",
-            border: panelOpen
+            border: worldActive
               ? "1px solid var(--accent-border)"
               : "1px solid var(--border-dim)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             cursor: "pointer",
-            color: panelOpen
+            color: worldActive
               ? "var(--accent-text)"
               : hovered
               ? "var(--text-primary)"
@@ -62,7 +63,7 @@ export function BottomToolbar({ panelOpen, onTogglePanel }: BottomToolbarProps) 
             transition: "all 120ms",
           }}
         >
-          <Wand2 size={13} strokeWidth={1.5} />
+          <WandSparkles size={13} strokeWidth={1.5} />
         </button>
       </div>
     </div>
