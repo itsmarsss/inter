@@ -11,8 +11,10 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.4.1",
+    "@google/genai": "^1.50.1",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.4.0",
+    "@react-three/xr": "^6.6.29",
     "@sparkjsdev/spark": "^0.1.10",
     "@tailwindcss/postcss": "^4.1.16",
     "clsx": "^2.1.1",
@@ -22,7 +24,9 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-resizable-panels": "^3.0.6",
+    "serpapi": "^2.2.1",
     "server-only": "^0.0.1",
+    "ssh2": "^1.17.0",
     "tailwind-merge": "^3.3.1",
     "three": "^0.181.2",
     "three-stdlib": "^2.36.1"
@@ -33,6 +37,7 @@
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
+    "@types/ssh2": "^1.15.5",
     "@types/three": "^0.184.0",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",

@@ -103,21 +103,25 @@ function buildMarblePayload({
     };
   });
 
+  // Marble's text prompt should describe STYLE/MOOD only (≤2000 chars per the
+  // prompt guide). Geometry / dimensions / object positions are conveyed by
+  // the panorama; numeric "preserve dimensions" instructions are not
+  // enforceable by the model and just crowd out the actual style signal.
+  // We send a compact, descriptive paragraph and let Marble's recaptioner
+  // enrich it from the panorama.
+  const styleText = (stylePrompt ?? "").trim();
+  const text_prompt = styleText
+    ? `${styleText} Interior room captured as a 360° equirectangular panorama; maintain the same overall layout, walls, openings, and major object footprints visible in the image.`
+    : "Photorealistic interior captured as a 360° equirectangular panorama; maintain the same overall layout, walls, openings, and major object footprints visible in the image.";
+
   return {
-    model: "marble-1.1",
+    // marble-1.1-plus enables dynamic world sizing, which adapts the generated
+    // world to the spatial proportions of the input — what we want for
+    // user-shaped rooms with outcrops.
+    model: "marble-1.1-plus",
     world_prompt: {
       type: "image",
-      text_prompt: [
-        stylePrompt,
-        "",
-        "Strictly preserve the submitted 360 equirectangular layout panorama.",
-        `Room dimensions must stay ${dimensions.width}m wide, ${dimensions.depth}m deep, ${dimensions.height}m tall.`,
-        "Keep wall planes, room footprint, camera origin, major object footprints, object positions, and object orientations fixed.",
-        `Furniture to preserve in place: ${objects.map((object) => `${object.name} at ${object.position.join(",")} rotated ${object.rotation.join(",")} scaled ${object.scale.join(",")}`).join("; ") || "none"}.`,
-        `Custom blockout shapes to preserve in place: ${shapes.map((shape) => `${shape.kind} "${shape.name}" at ${shape.position.join(",")} rotated ${shape.rotation.join(",")} scaled ${shape.scale.join(",")}`).join("; ") || "none"}.`,
-        `Project metadata: "${projectTitle}", ${visibility}, ${workflowStep} workflow, template ${templateId}, panorama reference opacity ${panoramaOpacity}.`,
-        "Replace blockout materials with finished interior art and realistic detail without adding, deleting, or relocating major furniture.",
-      ].join("\n"),
+      text_prompt,
     },
     metadata: {
       capture: layoutPano
