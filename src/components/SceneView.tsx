@@ -180,6 +180,17 @@ type InstanceRotateSession = {
   previousControlsEnabled: boolean;
 };
 
+type InstanceScaleSession = {
+  instanceId: string;
+  pointerId: number;
+  startScale: Vec3;
+  startDistance: number;
+  latestClientX: number;
+  latestClientY: number;
+  rafId: number | null;
+  previousControlsEnabled: boolean;
+};
+
 type OpeningKind = "door" | "window";
 
 type OpeningDragSession = {
@@ -712,6 +723,7 @@ function SceneContent({
   const shapeResizeRef = useRef<ShapeResizeSession | null>(null);
   const shapeRotateRef = useRef<ShapeRotateSession | null>(null);
   const instanceRotateRef = useRef<InstanceRotateSession | null>(null);
+  const instanceScaleRef = useRef<InstanceScaleSession | null>(null);
   const openingDragRef = useRef<OpeningDragSession | null>(null);
   const segmentDragRef = useRef<SegmentDisplacementSession | null>(null);
   const connectorDragRef = useRef<ConnectorBoundarySession | null>(null);
@@ -1036,6 +1048,92 @@ function SceneContent({
   useEffect(() => {
     const element = gl.domElement;
 
+    function applyInstanceScale() {
+      const session = instanceScaleRef.current;
+      if (!session) return;
+
+      session.rafId = null;
+      const instance = instancesRef.current.find((item) => item.id === session.instanceId);
+      if (!instance) return;
+
+      const point = projectPointerToFloor(session.latestClientX, session.latestClientY);
+      if (!point) return;
+
+      const currentDistance = pointerDistanceOnFloor(instance.position, point);
+      const factor = Math.min(5, Math.max(0.2, currentDistance / Math.max(0.001, session.startDistance)));
+      const nextScale: Vec3 = [
+        Math.max(0.05, session.startScale[0] * factor),
+        Math.max(0.05, session.startScale[1] * factor),
+        Math.max(0.05, session.startScale[2] * factor),
+      ];
+
+      onInstancesChangeRef.current(
+        instancesRef.current.map((item) =>
+          item.id === session.instanceId ? { ...item, position: [item.position[0], 0, item.position[2]], scale: nextScale } : item,
+        ),
+      );
+    }
+
+    function scheduleInstanceScaleUpdate() {
+      const session = instanceScaleRef.current;
+      if (!session || session.rafId !== null) return;
+      session.rafId = window.requestAnimationFrame(applyInstanceScale);
+    }
+
+    function endInstanceScale(pointerId?: number) {
+      const session = instanceScaleRef.current;
+      if (!session || (pointerId !== undefined && session.pointerId !== pointerId)) return;
+
+      if (session.rafId !== null) {
+        window.cancelAnimationFrame(session.rafId);
+      }
+
+      try {
+        if (element.hasPointerCapture(session.pointerId)) {
+          element.releasePointerCapture(session.pointerId);
+        }
+      } catch {
+        // Pointer capture can already be gone after browser-level cancellation.
+      }
+
+      const controls = orbitControlsRef.current;
+      if (controls) controls.enabled = session.previousControlsEnabled;
+      instanceScaleRef.current = null;
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      const session = instanceScaleRef.current;
+      if (!session || session.pointerId !== event.pointerId) return;
+      session.latestClientX = event.clientX;
+      session.latestClientY = event.clientY;
+      scheduleInstanceScaleUpdate();
+    }
+
+    function handlePointerUp(event: PointerEvent) {
+      endInstanceScale(event.pointerId);
+    }
+
+    function handleBlur() {
+      endInstanceScale();
+    }
+
+    window.addEventListener("pointermove", handlePointerMove, { capture: true });
+    window.addEventListener("pointerup", handlePointerUp, { capture: true });
+    window.addEventListener("pointercancel", handlePointerUp, { capture: true });
+    window.addEventListener("blur", handleBlur);
+
+    return () => {
+      endInstanceScale();
+      window.removeEventListener("pointermove", handlePointerMove, { capture: true });
+      window.removeEventListener("pointerup", handlePointerUp, { capture: true });
+      window.removeEventListener("pointercancel", handlePointerUp, { capture: true });
+      window.removeEventListener("blur", handleBlur);
+    };
+  }, [gl.domElement, projectPointerToFloor]);
+
+  useEffect(() => {
+    const element = gl.domElement;
+
     function applyObjectDrag() {
       const session = objectDragRef.current;
       if (!session) return;
@@ -1165,7 +1263,8 @@ function SceneContent({
           projectPointerToFloor,
         );
         if (nextLocalValue === null) return;
-        nextAxisScale = session.startScale[session.axis] + session.sign * 2 * (nextLocalValue - session.startLocalValue);
+        const sensitivity = session.axis === 2 ? 1 : 2;
+        nextAxisScale = session.startScale[session.axis] + session.sign * sensitivity * (nextLocalValue - session.startLocalValue);
       }
 
       const nextScale: Vec3 = [...session.startScale];
@@ -1923,6 +2022,37 @@ function SceneContent({
     onSelect({ type: "shape", id: shape.id });
   }
 
+  function handleInstanceScalePointerDown(instance: FurnitureInstance, event: ThreeEvent<PointerEvent>) {
+    if (viewMode !== "blockout") return;
+    if (tool !== "select" && tool !== "move" && tool !== "scale") return;
+    if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
+
+    event.stopPropagation();
+    const point = projectPointerToFloor(event.clientX, event.clientY);
+    if (!point) return;
+
+    const controls = orbitControlsRef.current;
+    instanceScaleRef.current = {
+      instanceId: instance.id,
+      pointerId: event.pointerId,
+      startScale: [...instance.scale],
+      startDistance: pointerDistanceOnFloor(instance.position, point),
+      latestClientX: event.clientX,
+      latestClientY: event.clientY,
+      rafId: null,
+      previousControlsEnabled: controls?.enabled ?? true,
+    };
+
+    objectDragRef.current = null;
+    if (controls) controls.enabled = false;
+    try {
+      gl.domElement.setPointerCapture(event.pointerId);
+    } catch {
+      // Some browsers can reject capture if the native pointer sequence has already ended.
+    }
+    onSelect({ type: "furniture", id: instance.id });
+  }
+
   function handleInstanceRotatePointerDown(instance: FurnitureInstance, event: ThreeEvent<PointerEvent>) {
     if (viewMode !== "blockout") return;
     if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
@@ -2288,6 +2418,7 @@ function SceneContent({
                 handleObjectPointerDown({ type: "furniture", id: instance.id }, instance.position, event)
               }
               onRotateStart={(event) => handleInstanceRotatePointerDown(instance, event)}
+              onScaleStart={(event) => handleInstanceScalePointerDown(instance, event)}
               onTransformActiveChange={handleTransformActiveChange}
               onChange={updateInstance}
               onMeasured={
@@ -2796,6 +2927,10 @@ function pointerAngleAroundPosition(
   const point = projectPointerToFloor(clientX, clientY);
   if (!point) return null;
   return Math.atan2(point[2] - position[2], point[0] - position[0]);
+}
+
+function pointerDistanceOnFloor(position: Vec3, point: Vec3) {
+  return Math.hypot(point[0] - position[0], point[2] - position[2]);
 }
 
 function shortestAngleDelta(nextAngle: number, startAngle: number) {
@@ -4982,6 +5117,7 @@ type FurnitureNodeProps = {
   onSelect: () => void;
   onDragStart: (event: ThreeEvent<PointerEvent>) => void;
   onRotateStart: (event: ThreeEvent<PointerEvent>) => void;
+  onScaleStart: (event: ThreeEvent<PointerEvent>) => void;
   onTransformActiveChange: (active: boolean) => void;
   onChange: (instance: FurnitureInstance) => void;
   onMeasured?: (footprint: { width: number; depth: number; height: number }) => void;
@@ -4999,6 +5135,7 @@ function FurnitureNode({
   onSelect,
   onDragStart,
   onRotateStart,
+  onScaleStart,
   onTransformActiveChange,
   onChange,
   onMeasured,
@@ -5006,6 +5143,7 @@ function FurnitureNode({
   const groupRef = useRef<THREE.Group>(null);
   const transformMode = tool === "rotate" ? "rotate" : tool === "scale" ? "scale" : "translate";
   const modelUrl = asset?.modelUrl ? proxiedModelUrl(asset.modelUrl) : undefined;
+  const profile = FURNITURE_REGION_PROFILES[asset?.primitive ?? "sofa"];
 
   useFrame(() => {
     if (!groupRef.current || !selected) return;
@@ -5064,6 +5202,7 @@ function FurnitureNode({
         )}
       </Suspense>
       {selected ? <FurnitureRotateRing onRotateStart={onRotateStart} /> : null}
+      {selected ? <FurnitureScaleHandles size={profile.size} opacity={opacity} onScaleStart={onScaleStart} /> : null}
     </group>
   );
 
@@ -5735,5 +5874,58 @@ function FurnitureRotateRing({
       <ringGeometry args={[0.78, 0.97, 48]} />
       <meshBasicMaterial transparent opacity={0} depthWrite={false} />
     </mesh>
+  );
+}
+
+function FurnitureScaleHandles({
+  size,
+  opacity,
+  onScaleStart,
+}: {
+  size: Vec3;
+  opacity: number;
+  onScaleStart: (event: ThreeEvent<PointerEvent>) => void;
+}) {
+  const halfX = Math.max(0.42, size[0] / 2 + 0.16);
+  const halfZ = Math.max(0.42, size[2] / 2 + 0.16);
+  const y = 0.09;
+  const handles: Vec3[] = [
+    [-halfX, y, -halfZ],
+    [halfX, y, -halfZ],
+    [halfX, y, halfZ],
+    [-halfX, y, halfZ],
+  ];
+
+  return (
+    <group userData={{ captureHidden: true }}>
+      {handles.map((position, index) => (
+        <mesh
+          key={`${index}-${position[0]}-${position[2]}`}
+          position={position}
+          onPointerDown={(event) => {
+            event.stopPropagation();
+            onScaleStart(event);
+          }}
+          onPointerOver={(event) => {
+            event.stopPropagation();
+            document.body.style.cursor = "nwse-resize";
+          }}
+          onPointerOut={() => {
+            document.body.style.cursor = "";
+          }}
+        >
+          <boxGeometry args={[0.14, 0.14, 0.14]} />
+          <meshStandardMaterial
+            color={SCENE_COLORS.axisX}
+            emissive={SCENE_COLORS.axisX}
+            emissiveIntensity={0.24}
+            roughness={0.42}
+            transparent
+            opacity={0.94 * opacity}
+            depthWrite={opacity >= 0.98}
+          />
+        </mesh>
+      ))}
+    </group>
   );
 }

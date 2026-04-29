@@ -21,6 +21,7 @@ import { BlueprintView } from "./components/BlueprintView";
 import type { ViewMode } from "./components/ModeBar";
 import {
   buildFurnitureAssetMap,
+  clampOpeningsToLayout,
   clampToFloor,
   createDefaultWallSegmentation,
   createDoor,
@@ -62,8 +63,15 @@ export default function App({ entering = false }: { entering?: boolean }) {
 
       if (event.key === "Delete" || event.key === "Backspace") {
         setState((current) => {
-          if (current.selected?.type !== "furniture") return current;
+          if (current.selected?.type !== "furniture" && current.selected?.type !== "shape") return current;
           const id = current.selected.id;
+          if (current.selected.type === "shape") {
+            return {
+              ...current,
+              customShapes: current.customShapes.filter((shape) => shape.id !== id),
+              selected: null,
+            };
+          }
           return {
             ...current,
             furnitureInstances: current.furnitureInstances.filter((i) => i.id !== id),
@@ -414,18 +422,23 @@ export default function App({ entering = false }: { entering?: boolean }) {
   }
 
   const setRoom: React.ComponentProps<typeof SceneView>["onRoomChange"] = (room) =>
-    setState((current) => ({
-      ...current,
-      room,
-      furnitureInstances: current.furnitureInstances.map((instance) => ({
-        ...instance,
-        position: clampToFloor(instance.position, room, current.wallSegments),
-      })),
-      customShapes: current.customShapes.map((shape) => ({
-        ...shape,
-        position: clampToFloor(shape.position, room, current.wallSegments),
-      })),
-    }));
+    setState((current) => {
+      const openings = clampOpeningsToLayout(room, current.wallSegments, current.doors, current.windows);
+      return {
+        ...current,
+        room,
+        doors: openings.doors,
+        windows: openings.windows,
+        furnitureInstances: current.furnitureInstances.map((instance) => ({
+          ...instance,
+          position: clampToFloor(instance.position, room, current.wallSegments),
+        })),
+        customShapes: current.customShapes.map((shape) => ({
+          ...shape,
+          position: clampToFloor(shape.position, room, current.wallSegments),
+        })),
+      };
+    });
   const setInstances: React.ComponentProps<typeof SceneView>["onInstancesChange"] = (furnitureInstances) =>
     setState((current) => ({ ...current, furnitureInstances }));
   const setShapes: React.ComponentProps<typeof SceneView>["onShapesChange"] = (customShapes) =>
@@ -437,18 +450,23 @@ export default function App({ entering = false }: { entering?: boolean }) {
   const setWindows: React.ComponentProps<typeof SceneView>["onWindowsChange"] = (windows) =>
     setState((current) => ({ ...current, windows }));
   const setWallSegments: React.ComponentProps<typeof SceneView>["onWallSegmentsChange"] = (wallSegments) =>
-    setState((current) => ({
-      ...current,
-      wallSegments,
-      furnitureInstances: current.furnitureInstances.map((instance) => ({
-        ...instance,
-        position: clampToFloor(instance.position, current.room, wallSegments),
-      })),
-      customShapes: current.customShapes.map((shape) => ({
-        ...shape,
-        position: clampToFloor(shape.position, current.room, wallSegments),
-      })),
-    }));
+    setState((current) => {
+      const openings = clampOpeningsToLayout(current.room, wallSegments, current.doors, current.windows);
+      return {
+        ...current,
+        wallSegments,
+        doors: openings.doors,
+        windows: openings.windows,
+        furnitureInstances: current.furnitureInstances.map((instance) => ({
+          ...instance,
+          position: clampToFloor(instance.position, current.room, wallSegments),
+        })),
+        customShapes: current.customShapes.map((shape) => ({
+          ...shape,
+          position: clampToFloor(shape.position, current.room, wallSegments),
+        })),
+      };
+    });
   const setSelected: React.ComponentProps<typeof SceneView>["onSelect"] = (selected) =>
     setState((current) => ({ ...current, selected }));
   const setTool: React.ComponentProps<typeof SceneView>["onToolChange"] = (tool) =>
@@ -498,23 +516,46 @@ export default function App({ entering = false }: { entering?: boolean }) {
     }));
   }
 
-  function handleRemoveWallSegment(wall: Parameters<typeof removeWallSegment>[1], id: string) {
+  function handleRemoveShape(id: string) {
     setState((current) => ({
       ...current,
-      wallSegments: removeWallSegment(current.wallSegments, wall, id),
+      customShapes: current.customShapes.filter((shape) => shape.id !== id),
       selected:
-        current.selected?.type === "wall-segment" && current.selected.id === id
+        current.selected?.type === "shape" && current.selected.id === id
           ? null
           : current.selected,
     }));
   }
 
+  function handleRemoveWallSegment(wall: Parameters<typeof removeWallSegment>[1], id: string) {
+    setState((current) => {
+      const wallSegments = removeWallSegment(current.wallSegments, wall, id);
+      const openings = clampOpeningsToLayout(current.room, wallSegments, current.doors, current.windows);
+      return {
+        ...current,
+        wallSegments,
+        doors: openings.doors,
+        windows: openings.windows,
+        selected:
+          current.selected?.type === "wall-segment" && current.selected.id === id
+            ? null
+            : current.selected,
+      };
+    });
+  }
+
   function handleResetWallSegments() {
-    setState((current) => ({
-      ...current,
-      wallSegments: createDefaultWallSegmentation(),
-      selected: current.selected?.type === "wall-segment" ? null : current.selected,
-    }));
+    setState((current) => {
+      const wallSegments = createDefaultWallSegmentation();
+      const openings = clampOpeningsToLayout(current.room, wallSegments, current.doors, current.windows);
+      return {
+        ...current,
+        wallSegments,
+        doors: openings.doors,
+        windows: openings.windows,
+        selected: current.selected?.type === "wall-segment" ? null : current.selected,
+      };
+    });
   }
 
   return (
@@ -620,6 +661,7 @@ export default function App({ entering = false }: { entering?: boolean }) {
       onRemoveWindow={handleRemoveWindow}
       onRemoveFurnitureInstance={handleRemoveFurnitureInstance}
       onRotateFurnitureInstance={handleRotateFurnitureInstance}
+      onRemoveShape={handleRemoveShape}
       onRemoveWallSegment={handleRemoveWallSegment}
       onResetWallSegments={handleResetWallSegments}
       onGenerateFurniture={handleGenerateFurniture}

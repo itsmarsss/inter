@@ -53,6 +53,7 @@ type ObjectsPanelProps = {
   onRemoveWindow: (id: string) => void;
   onRemoveFurnitureInstance: (id: string) => void;
   onRotateFurnitureInstance: (id: string, deltaRad: number) => void;
+  onRemoveShape: (id: string) => void;
   onRemoveWallSegment: (wall: WallId, id: string) => void;
   onResetWallSegments: () => void;
   onClose: () => void;
@@ -112,6 +113,7 @@ export function ObjectsPanel({
   onRemoveWindow,
   onRemoveFurnitureInstance,
   onRotateFurnitureInstance,
+  onRemoveShape,
   onRemoveWallSegment,
   onResetWallSegments,
   onClose,
@@ -286,6 +288,7 @@ export function ObjectsPanel({
                 meta={shape.kind}
                 selected={selected?.type === "shape" && selected.id === shape.id}
                 onSelect={() => onSelect({ type: "shape", id: shape.id })}
+                onRemove={() => onRemoveShape(shape.id)}
               />
             ))}
           </ListSection>
