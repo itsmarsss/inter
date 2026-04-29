@@ -18,6 +18,7 @@ Core capabilities include:
 - A full-screen 3D workspace paired with a synchronized blueprint renderer.
 - A room-to-world workflow that turns room captures and prompts into an immersive Gaussian splat visualization.
 - WebXR entry for exploring generated splat worlds in a headset when supported.
+- A companion Unity Quest capture project under `quest-capture/` for headset-based room capture and export workflows.
 
 The goal is to make early interior design exploration feel fast, spatial, and directly editable: generate ideas with AI, then refine them by moving through the room and manipulating objects yourself.
 
@@ -36,6 +37,7 @@ INTER is built with:
 - GLB/GLTF asset workflows
 - Gaussian splat rendering for immersive room views
 - SerpAPI eBay search for product discovery
+- Unity, OpenXR, and Meta XR tooling for the Quest capture companion app
 
 The editor is driven by shared application state for rooms, furniture assets, furniture instances, wall segments, doors, windows, cameras, custom shapes, generated worlds, and persisted library entries.
 
@@ -104,6 +106,12 @@ Open the app at:
 http://localhost:3000
 ```
 
+## Quest Capture Project
+
+The `quest-capture/` folder is a separate Unity project for Meta Quest room capture workflows. It includes Unity project settings, XR/OpenXR configuration, Meta/Oculus assets, and scripts such as `FloorPlanReader` and `RoomMeshExporterUI` for reading room layout data and exporting capture artifacts.
+
+Open `quest-capture/` directly in Unity when working on the headset capture side. It is intentionally kept separate from the Next.js app runtime and does not participate in the `pnpm` scripts.
+
 ## Scripts
 
 ```bash
@@ -124,6 +132,8 @@ src/server/   Server-side API helpers and asset persistence
 src/state/    Editor state, geometry helpers, and shared types
 src/styles/   Global styles and design tokens
 public/       Generated meshes, splats, icons, and static assets
+quest-capture/
+              Unity project for Meta Quest room capture and export workflows
 ```
 
 ## Challenges
