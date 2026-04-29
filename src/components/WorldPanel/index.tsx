@@ -29,14 +29,19 @@ export function WorldPanel({
   const hasResult = marble.status === "complete";
   const canGenerate = prompt.trim().length > 0 && !busy;
 
-  const progressPct =
-    marble.status === "uploading"
-      ? "35%"
+  // Drive the bar from real run progress when we have it, otherwise fall back
+  // to status bands so the bar still moves on legacy/edge states.
+  const progressFraction =
+    typeof marble.progress === "number"
+      ? Math.min(1, Math.max(0, marble.progress))
+      : marble.status === "uploading"
+      ? 0.05
       : marble.status === "generating"
-      ? "72%"
+      ? 0.55
       : marble.status === "complete"
-      ? "100%"
-      : "0%";
+      ? 1
+      : 0;
+  const progressPct = `${Math.round(progressFraction * 100)}%`;
 
   return (
     <div
@@ -58,21 +63,6 @@ export function WorldPanel({
         zIndex: 15,
       }}
     >
-      {/* Progress line — top edge */}
-      <div
-        style={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          height: 2,
-          width: progressPct,
-          background: hasResult ? "var(--status-ready)" : "var(--accent)",
-          transition: "width 1400ms ease, background 400ms ease",
-          zIndex: 2,
-          opacity: marble.status === "idle" ? 0 : 1,
-        }}
-      />
-
       {/* Header */}
       <div
         style={{
@@ -88,11 +78,13 @@ export function WorldPanel({
         <WandSparkles size={13} strokeWidth={1.5} color="var(--accent-text)" />
         <span
           style={{
-            fontSize: 13,
-            fontWeight: 500,
+            fontSize: 17,
+            fontWeight: 400,
             color: "var(--text-bright)",
-            letterSpacing: "-0.01em",
-            fontFamily: "var(--font-ui)",
+            letterSpacing: "0.06em",
+            fontFamily: "var(--font-display)",
+            textTransform: "uppercase",
+            lineHeight: 1,
             flex: 1,
             whiteSpace: "nowrap",
           }}
@@ -160,22 +152,75 @@ export function WorldPanel({
         />
       </div>
 
-      {/* Status / error line */}
-      {(marble.error || busy) && (
+      {/* Loader — eyebrow label + thin accent bar (matches site aesthetic) */}
+      {busy && !marble.error && (
+        <div style={{ padding: "14px 12px 0", flexShrink: 0 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              justifyContent: "space-between",
+              marginBottom: 8,
+            }}
+          >
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 400,
+                color: "var(--text-secondary)",
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+                fontFamily: "var(--font-ui)",
+              }}
+            >
+              {marble.status === "uploading" ? "Packaging" : "Generating"}
+            </span>
+            <span
+              style={{
+                fontSize: 10,
+                color: "var(--text-primary)",
+                fontFamily: "var(--font-mono)",
+                fontVariantNumeric: "tabular-nums",
+                letterSpacing: "0.04em",
+              }}
+            >
+              {progressPct}
+            </span>
+          </div>
+          <div
+            style={{
+              position: "relative",
+              height: 3,
+              background: "var(--surface-input)",
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                width: progressPct,
+                background: "var(--accent)",
+                transition: "width 320ms cubic-bezier(0.4, 0, 0.2, 1)",
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Error line */}
+      {marble.error && (
         <div
           style={{
             padding: "6px 12px 0",
             fontSize: 11,
-            color: marble.error ? "var(--status-error)" : "var(--text-secondary)",
+            color: "var(--status-error)",
             fontFamily: "var(--font-ui)",
             lineHeight: 1.5,
             flexShrink: 0,
           }}
         >
-          {marble.error ??
-            (marble.status === "uploading"
-              ? "Packaging scene and assets…"
-              : "Generating your world…")}
+          {marble.error}
         </div>
       )}
 

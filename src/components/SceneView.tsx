@@ -1,12 +1,25 @@
 import { SplatEdit, SplatEditRgbaBlendMode, SplatEditSdf, SplatEditSdfType, SplatMesh } from "@sparkjsdev/spark";
 import { Canvas, type ThreeEvent, useFrame, useThree } from "@react-three/fiber";
-import { Grid, Html, OrbitControls, PerspectiveCamera, PointerLockControls, TransformControls, useGLTF } from "@react-three/drei";
-import { Camera, Footprints, Minus, SlidersHorizontal } from "lucide-react";
-import { Component, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Grid, Html, OrbitControls, PerspectiveCamera, TransformControls, useGLTF } from "@react-three/drei";
+import { XR, XROrigin, createXRStore, useXR, useXRControllerLocomotion } from "@react-three/xr";
+import { Camera, Minus, SlidersHorizontal } from "lucide-react";
+import {
+  Component,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import * as THREE from "three";
-import type { OrbitControls as OrbitControlsImpl, PointerLockControls as PointerLockControlsImpl } from "three-stdlib";
+import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import {
   buildFloorPolygon,
+  clampToFloor,
   clampToRoom,
   clampWallOffset,
   clampWindowVerticalOffset,
@@ -16,12 +29,10 @@ import {
   createSceneCamera,
   createWindowOpening,
   cutWallAt,
-  clampToFloor,
   findSegmentAtFraction,
   isSegmentationDefault,
   offsetToFraction,
   resizeRoomFromWall,
-  roomDimensions,
   setRoomDimensionFromWall,
   setSegmentDisplacement,
   wallAxisLength,
@@ -41,12 +52,14 @@ import type {
   ShapeKind,
   ToolMode,
   Vec3,
+  WallConnectorRef,
   WallId,
   WallSegment,
   WallSegmentation,
   WindowOpening,
 } from "../state/types";
 import { cn } from "../lib/cn";
+import { getDragAssetId } from "../state/dragAsset";
 
 type SceneViewProps = {
   room: RoomBounds;
@@ -75,6 +88,10 @@ type SceneViewProps = {
   onSelect: (selected: SelectedRef) => void;
   onToolChange: (tool: ToolMode) => void;
   registerSceneCapture: (capture: () => CaptureImage | undefined) => void;
+  onAssetMeasured?: (
+    assetId: string,
+    footprint: { width: number; depth: number; height: number },
+  ) => void;
 };
 
 type Projector = (clientX: number, clientY: number) => Vec3 | null;
@@ -85,6 +102,13 @@ type SplatAlignment = {
   position: Vec3;
   rotationY: number;
   scale: number;
+  /**
+   * Marble-produced SPZs are Y-down so we apply a 180° flip around X to bring
+   * them into Three's Y-up convention. Pre-baked splats from other tools are
+   * often already Y-up — set to `false` for those. Defaults to `true` to
+   * preserve historical behavior.
+   */
+  flipX?: boolean;
 };
 type SplatObjectRegion = {
   sourceRef: Exclude<NonNullable<SelectedRef>, { type: "wall" | "camera" }>;
@@ -137,7 +161,11 @@ type ShapeResizeSession = {
   sign: -1 | 1;
   startScale: Vec3;
   startLocalValue: number;
+  screenAxisX: number;
+  screenAxisY: number;
+  screenAxisLengthSq: number;
   startClientY: number;
+  startClientX: number;
   latestClientX: number;
   latestClientY: number;
   rafId: number | null;
@@ -155,15 +183,50 @@ type ShapeRotateSession = {
   previousControlsEnabled: boolean;
 };
 
+type InstanceRotateSession = {
+  instanceId: string;
+  pointerId: number;
+  startRotation: Vec3;
+  startAngle: number;
+  latestClientX: number;
+  latestClientY: number;
+  rafId: number | null;
+  previousControlsEnabled: boolean;
+};
+
+type InstanceScaleSession = {
+  instanceId: string;
+  pointerId: number;
+  axis: ShapeResizeAxis;
+  sign: -1 | 1;
+  startScale: Vec3;
+  baseSize: Vec3;
+  screenAxisX: number;
+  screenAxisY: number;
+  screenAxisLengthSq: number;
+  startClientX: number;
+  startClientY: number;
+  latestClientX: number;
+  latestClientY: number;
+  rafId: number | null;
+  previousControlsEnabled: boolean;
+};
+
 type OpeningKind = "door" | "window";
 
 type OpeningDragSession = {
   kind: OpeningKind;
   id: string;
+  mode: "move" | "scale";
   pointerId: number;
   wall: WallId;
+  connector?: WallConnectorRef;
   startOffset: number;
   startBaseY: number;
+  startWidth: number;
+  startHeight: number;
+  startPointerAlong: number;
+  startPointerY: number;
   grabOffsetAlong: number;
   grabOffsetVertical: number;
   latestClientX: number;
@@ -187,6 +250,42 @@ type SegmentDisplacementSession = {
   rafId: number | null;
   previousControlsEnabled: boolean;
 };
+
+type ConnectorBoundarySession = {
+  connector: WallConnectorRef;
+  pointerId: number;
+  startFraction: number;
+  grabOffset: number;
+  startClientX: number;
+  startClientY: number;
+  screenAxisX: number;
+  screenAxisY: number;
+  screenAxisLengthSq: number;
+  latestClientX: number;
+  latestClientY: number;
+  rafId: number | null;
+  previousControlsEnabled: boolean;
+};
+
+/**
+ * Bright, well-lit "blockout" colors used only when capturing the layout
+ * panorama for Marble. Marble's image guidance recommends clear floor / wall /
+ * ceiling contrast so its model can read the spatial structure. The editor's
+ * normal dark theme is great for UX but reads as a dim grey box to Marble.
+ *
+ * Roles are tagged on the architectural meshes via `userData.captureRole` and
+ * applied/restored by `prepareSceneForLayoutCapture`.
+ */
+const LAYOUT_CAPTURE = {
+  background: "#E8E4D8",
+  floor: "#C9A37A",
+  wall: "#EFEAE0",
+  doorPanel: "#7A4A2B",
+  doorFrame: "#3A2410",
+  windowGlass: "#9BC4E2",
+  windowFrame: "#3A2410",
+  ambientIntensity: 0.95,
+} as const;
 
 const SCENE_COLORS = {
   background: "#080B10",
@@ -216,12 +315,9 @@ const SCENE_COLORS = {
   extrusion: "#8C7B6B",
 } as const;
 
-const EDITING_MOUSE_BUTTONS: OrbitControlsImpl["mouseButtons"] = {
-  MIDDLE: THREE.MOUSE.ROTATE,
-  RIGHT: THREE.MOUSE.PAN,
-};
-
-const ALT_ORBIT_MOUSE_BUTTONS: OrbitControlsImpl["mouseButtons"] = {
+// Left drag orbits on empty space; object-drag sessions disable controls before
+// any movement occurs, so selection and furniture dragging are unaffected.
+const VIEWPORT_MOUSE_BUTTONS: OrbitControlsImpl["mouseButtons"] = {
   LEFT: THREE.MOUSE.ROTATE,
   MIDDLE: THREE.MOUSE.ROTATE,
   RIGHT: THREE.MOUSE.PAN,
@@ -232,18 +328,75 @@ const VIEWPORT_TOUCHES: OrbitControlsImpl["touches"] = {
   TWO: THREE.TOUCH.DOLLY_PAN,
 };
 
+const TRACKPAD_PIXEL_DELTA_THRESHOLD = 42;
+
 const FLOOR_PLANE = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const SPARK_SPLAT_BASE_QUATERNION = new THREE.Quaternion(1, 0, 0, 0);
+const SPLAT_IDENTITY_QUATERNION = new THREE.Quaternion();
 const DEFAULT_SPLAT_ALIGNMENT: SplatAlignment = {
   position: [0, 0, 0],
   rotationY: 0,
   scale: 1,
+  flipX: true,
+};
+/** URL → starting alignment overrides for pre-baked splats we ship locally. */
+const LOCAL_SPLAT_DEFAULTS: Record<string, SplatAlignment> = {
+  "/splats/sleek-icelandic-bedroom.spz": {
+    position: [0, 0, 0],
+    rotationY: 0,
+    scale: 1.8,
+    flipX: false,
+  },
 };
 const INITIAL_CAMERA_POSITION: Vec3 = [6.5, 5.2, 7];
 const WALK_SPEED = 2.4;
 const WALK_FAST_MULTIPLIER = 1.8;
-const WALK_WALL_MARGIN = 0.3;
 const WALK_EYE_HEIGHT = 1.6;
+
+/**
+ * Single module-level WebXR store. createXRStore() lazily wires Three.js's
+ * renderer.xr into the active <XR> tree, so creating it once at import time
+ * is safe even before any Canvas mounts. The button outside the Canvas calls
+ * `xrStore.enterVR()` directly; useXR() inside the tree reads session state.
+ *
+ * Configuration is tuned for the "render on PC, present on Quest via Meta
+ * Quest Link / SteamVR" flow:
+ *  - We render only the splat walkthrough in VR — no UI panels, no hand UI —
+ *    so we disable hand pointers, gaze, screen input, transient pointers,
+ *    and all of the world-tracking features (planes, meshes, hit-test,
+ *    anchors, body, depth). This keeps the session lean and avoids
+ *    permission prompts the user doesn't expect.
+ *  - Controller models stay on so the user can see their Touch controllers
+ *    (and so `useXRControllerLocomotion` has a thumbstick to read).
+ *  - Framebuffer scaling is set to "high" since the laptop GPU has the
+ *    headroom that the Quest standalone GPU does not.
+ */
+const xrStore = createXRStore({
+  controller: true,
+  hand: false,
+  transientPointer: false,
+  gaze: false,
+  screenInput: false,
+  frameBufferScaling: "high",
+  foveation: 0,
+  anchors: false,
+  handTracking: false,
+  bodyTracking: false,
+  planeDetection: false,
+  meshDetection: false,
+  hitTest: false,
+  depthSensing: false,
+  domOverlay: false,
+});
+/**
+ * Half-extent of the box (centered at the origin) the splat first-person
+ * camera is allowed to roam. The local pre-baked splat is roughly bedroom-
+ * sized at scale 3, so ±2.5m gives enough wiggle without letting the walker
+ * drift outside the scan.
+ */
+const SPLAT_WALK_HALF_EXTENT = 2.5;
+const SPLAT_LOOK_SENSITIVITY = 0.0035;
+const SPLAT_PITCH_LIMIT = THREE.MathUtils.degToRad(70);
 const LAYOUT_PANO_WIDTH = 2048;
 const LAYOUT_PANO_FALLBACK_WIDTH = 1536;
 const LAYOUT_PANO_MAX_DATA_URL_BYTES = 30 * 1024 * 1024;
@@ -315,6 +468,23 @@ function furnitureSplatRegion(instance: FurnitureInstance, primitive: FurnitureA
   };
 }
 
+function furnitureResizeHandleSize(asset?: FurnitureAsset): Vec3 {
+  const profile = FURNITURE_REGION_PROFILES[asset?.primitive ?? "sofa"];
+  const footprint = asset?.footprint;
+  if (
+    footprint &&
+    Number.isFinite(footprint.width) &&
+    Number.isFinite(footprint.depth) &&
+    Number.isFinite(footprint.height) &&
+    footprint.width > 0 &&
+    footprint.depth > 0 &&
+    footprint.height > 0
+  ) {
+    return [footprint.width, footprint.height, footprint.depth];
+  }
+  return profile.size;
+}
+
 function shapeSplatRegion(shape: CustomShape): SplatObjectRegion {
   return {
     sourceRef: { type: "shape", id: shape.id },
@@ -342,14 +512,14 @@ function selectedRefMatches(left: NonNullable<SelectedRef>, right: SelectedRef) 
 
 export function SceneView(props: SceneViewProps) {
   const projectorRef = useRef<Projector | null>(null);
-  const firstPersonLockRef = useRef<() => void>(() => undefined);
+  const [dragGhost, setDragGhost] = useState<{ assetId: string; position: Vec3 | null } | null>(null);
+  const dragEnterCountRef = useRef(0);
   const [objectSplatMode, setObjectSplatMode] = useState<ObjectSplatMode>("off");
   const [splatLoadState, setSplatLoadState] = useState<SplatLoadState>({ status: "idle" });
   const [splatAlignmentState, setSplatAlignmentState] = useState<{
     spzUrl?: string;
     value: SplatAlignment;
   }>(() => ({ spzUrl: props.marble.spzUrl, value: splatAlignmentFromMarble(props.marble) }));
-  const [firstPersonActive, setFirstPersonActive] = useState(false);
   const generatedAvailable = props.marble.status === "complete" && Boolean(props.marble.spzUrl);
   const defaultSplatAlignment = splatAlignmentFromMarble(props.marble);
   const splatAlignment =
@@ -364,7 +534,10 @@ export function SceneView(props: SceneViewProps) {
   const activeViewMode: ViewMode = wantsSplat ? "generated" : "blockout";
   const blockoutOpacity = wantsSplat ? 0 : 1;
   const splatOpacity = wantsSplat ? 1 : 0;
-  const firstPersonEnabled = firstPersonActive && wantsSplat && splatLoadState.status !== "error";
+  // Splat view is *always* first-person. Once the splat is on screen and ready
+  // we hand the camera over to drag-to-look + WASD; orbit goes back on the
+  // moment we leave splat view.
+  const firstPersonActive = wantsSplat && splatLoadState.status === "ready";
 
   const selectedCamera =
     props.selected?.type === "camera" ? props.cameras.find((camera) => camera.id === props.selected?.id) : undefined;
@@ -376,20 +549,6 @@ export function SceneView(props: SceneViewProps) {
     ? splatObjectRegions.find((region) => selectedRefMatches(region.sourceRef, props.selected))
     : undefined;
   const objectSplatControlsVisible = generatedAvailable && splatOpacity > 0 && Boolean(selectedSplatRegion);
-
-  function enterFirstPerson() {
-    if (!wantsSplat) return;
-    setFirstPersonActive(true);
-    firstPersonLockRef.current();
-  }
-
-  function exitFirstPerson() {
-    setFirstPersonActive(false);
-  }
-
-  const registerFirstPersonLock = useCallback((lock: () => void) => {
-    firstPersonLockRef.current = lock;
-  }, []);
 
   function handleDrop(event: React.DragEvent<HTMLDivElement>) {
     event.preventDefault();
@@ -404,12 +563,45 @@ export function SceneView(props: SceneViewProps) {
     props.onSelect({ type: "furniture", id: instance.id });
   }
 
+  // Global dragend safety net: if the drag ends anywhere (e.g. released outside
+  // the viewport or dropped on another element), clear the ghost so it never
+  // stays stuck and blocks subsequent pointer events / raycasts.
+  useEffect(() => {
+    function clearGhost() {
+      dragEnterCountRef.current = 0;
+      setDragGhost(null);
+    }
+    document.addEventListener("dragend", clearGhost);
+    return () => document.removeEventListener("dragend", clearGhost);
+  }, []);
+
   return (
     <div
       className="relative h-full min-h-0 bg-[var(--color-background)]"
-      title="Viewport navigation: two-finger swipe, middle mouse, or Alt-drag orbits; right mouse pans."
-      onDragOver={(event) => event.preventDefault()}
-      onDrop={handleDrop}
+      onDragEnter={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+        const assetId = getDragAssetId();
+        if (assetId) setDragGhost({ assetId, position: null });
+      }}
+      onDragOver={(event) => {
+        event.preventDefault();
+        if (!dragGhost) return;
+        const raw = projectorRef.current?.(event.clientX, event.clientY);
+        if (raw) {
+          const clamped = clampToFloor(raw, props.room, props.wallSegments);
+          setDragGhost((prev) => (prev ? { ...prev, position: clamped } : null));
+        }
+      }}
+      onDragLeave={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+        dragEnterCountRef.current = 0;
+        setDragGhost(null);
+      }}
+      onDrop={(event) => {
+        dragEnterCountRef.current = 0;
+        setDragGhost(null);
+        handleDrop(event);
+      }}
     >
       <Canvas
         shadows
@@ -419,77 +611,74 @@ export function SceneView(props: SceneViewProps) {
         }}
         className="h-full w-full"
       >
-        <SceneContent
-          {...props}
-          viewMode={activeViewMode}
-          generatedAvailable={generatedAvailable}
-          splatAlignment={splatAlignment}
-          splatObjectRegions={splatObjectRegions}
-          objectSplatMode={objectSplatControlsVisible ? objectSplatMode : "off"}
-          blockoutOpacity={blockoutOpacity}
-          splatOpacity={splatOpacity}
-          firstPersonActive={firstPersonEnabled}
-          onSplatLoadStateChange={setSplatLoadState}
-          onFirstPersonActiveChange={setFirstPersonActive}
-          registerFirstPersonLock={registerFirstPersonLock}
-          setProjector={(projector) => (projectorRef.current = projector)}
-        />
+        {/*
+         * <XR> hooks the renderer into WebXR. When no XR session is active
+         * everything renders the same as before. When the user enters VR
+         * via xrStore.enterVR(), Three.js's renderer.xr takes over the
+         * camera (driven by the headset pose) and produces stereo frames
+         * for the HMD. Everything else in the scene — including the
+         * Gaussian splat — is drawn through the same render path, so it
+         * appears in the headset automatically.
+         */}
+        <XR store={xrStore}>
+          <SceneContent
+            {...props}
+            viewMode={activeViewMode}
+            generatedAvailable={generatedAvailable}
+            splatAlignment={splatAlignment}
+            splatObjectRegions={splatObjectRegions}
+            objectSplatMode={objectSplatControlsVisible ? objectSplatMode : "off"}
+            blockoutOpacity={blockoutOpacity}
+            splatOpacity={splatOpacity}
+            firstPersonActive={firstPersonActive}
+            onSplatLoadStateChange={setSplatLoadState}
+            setProjector={(projector) => (projectorRef.current = projector)}
+            dragGhost={(() => {
+              if (!dragGhost?.position) return undefined;
+              const asset = props.assetById?.get(dragGhost.assetId) ?? props.assets.find((a) => a.id === dragGhost.assetId);
+              return asset ? { asset, position: dragGhost.position } : undefined;
+            })()}
+          />
+        </XR>
       </Canvas>
-      <ToolHintBanner tool={props.tool} />
-      {wantsSplat ? (
+      {wantsSplat && objectSplatControlsVisible ? (
         <div className="absolute right-3 bottom-12 flex flex-col gap-1 rounded-md border border-[var(--border-mid)] bg-[#16181d] px-2 py-1 text-xs shadow-[0_8px_24px_rgba(0,0,0,0.45)]">
-          <button
-            type="button"
-            aria-pressed={firstPersonEnabled}
-            aria-label={firstPersonEnabled ? "Exit first-person view" : "Enter first-person view"}
-            title={firstPersonEnabled ? "Exit first-person view" : "Enter first-person view"}
-            className={`flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-sm border border-[var(--border-dim)] px-2 font-medium ${
-              firstPersonEnabled
-                ? "bg-[var(--accent-dim)] text-[var(--accent-text)]"
-                : "bg-[var(--surface-input)] text-[var(--text-primary)] hover:bg-[var(--surface-overlay)]"
-            }`}
-            onClick={firstPersonEnabled ? exitFirstPerson : enterFirstPerson}
-          >
-            <Footprints className="size-3.5" />
-            <span>{firstPersonEnabled ? "Exit" : "Walk"}</span>
-          </button>
-          {objectSplatControlsVisible ? (
-            <div className="flex min-w-0 items-center gap-2 border-t border-[var(--border-dim)] pt-1">
-              <span className="shrink-0 font-medium text-[var(--text-bright)]">Object</span>
-              <span className="max-w-[7rem] truncate text-[var(--text-secondary)]">{selectedSplatRegion?.label}</span>
-              <div className="flex min-w-0 flex-1 rounded-sm border border-[var(--border-dim)] bg-[var(--surface-input)] p-0.5">
-                {OBJECT_SPLAT_MODES.map((mode) => (
-                  <button
-                    key={mode.value}
-                    type="button"
-                    aria-pressed={objectSplatMode === mode.value}
-                    className={cn(
-                      "min-w-0 flex-1 rounded-sm px-1.5 py-0.5 font-medium",
-                      objectSplatMode === mode.value
-                        ? "bg-[var(--accent-dim)] text-[var(--accent-text)]"
-                        : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
-                    )}
-                    onClick={() => setObjectSplatMode(mode.value)}
-                  >
-                    <span className="block truncate">{mode.label}</span>
-                  </button>
-                ))}
-              </div>
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="shrink-0 font-medium text-[var(--text-bright)]">Object</span>
+            <span className="max-w-[7rem] truncate text-[var(--text-secondary)]">{selectedSplatRegion?.label}</span>
+            <div className="flex min-w-0 flex-1 rounded-sm border border-[var(--border-dim)] bg-[var(--surface-input)] p-0.5">
+              {OBJECT_SPLAT_MODES.map((mode) => (
+                <button
+                  key={mode.value}
+                  type="button"
+                  aria-pressed={objectSplatMode === mode.value}
+                  className={cn(
+                    "min-w-0 flex-1 rounded-sm px-1.5 py-0.5 font-medium",
+                    objectSplatMode === mode.value
+                      ? "bg-[var(--accent-dim)] text-[var(--accent-text)]"
+                      : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
+                  )}
+                  onClick={() => setObjectSplatMode(mode.value)}
+                >
+                  <span className="block truncate">{mode.label}</span>
+                </button>
+              ))}
             </div>
-          ) : null}
+          </div>
         </div>
+      ) : null}
+      {wantsSplat && splatLoadState.status === "ready" ? (
+        <SplatOverlayControls />
       ) : null}
       {splatOpacity > 0 && splatLoadState.status !== "ready" ? (
         <SplatViewportOverlay marble={props.marble} loadState={splatLoadState} />
       ) : null}
       {splatOpacity > 0 ? (
-        firstPersonEnabled ? null : (
-          <SplatAlignmentControls
-            alignment={splatAlignment}
-            defaultAlignment={defaultSplatAlignment}
-            onAlignmentChange={setSplatAlignment}
-          />
-        )
+        <SplatAlignmentControls
+          alignment={splatAlignment}
+          defaultAlignment={defaultSplatAlignment}
+          onAlignmentChange={setSplatAlignment}
+        />
       ) : null}
       {generatedAvailable && selectedCamera && props.marble.spzUrl ? (
         <SelectedCameraPreviewPanel
@@ -526,6 +715,7 @@ function SceneContent({
   onSelect,
   onToolChange,
   registerSceneCapture,
+  onAssetMeasured,
   marble,
   viewMode,
   generatedAvailable,
@@ -536,9 +726,8 @@ function SceneContent({
   splatOpacity,
   firstPersonActive,
   onSplatLoadStateChange,
-  onFirstPersonActiveChange,
-  registerFirstPersonLock,
   setProjector,
+  dragGhost,
 }: SceneViewProps & {
   viewMode: ViewMode;
   generatedAvailable: boolean;
@@ -549,12 +738,10 @@ function SceneContent({
   splatOpacity: number;
   firstPersonActive: boolean;
   onSplatLoadStateChange: (state: SplatLoadState) => void;
-  onFirstPersonActiveChange: (active: boolean) => void;
-  registerFirstPersonLock: (lock: () => void) => void;
   setProjector: (projector: Projector) => void;
+  dragGhost?: { asset: FurnitureAsset; position: Vec3 };
 }) {
   const orbitControlsRef = useRef<OrbitControlsImpl>(null);
-  const pointerLockControlsRef = useRef<PointerLockControlsImpl>(null);
   const roomRef = useRef(room);
   const instancesRef = useRef(instances);
   const shapesRef = useRef(shapes);
@@ -573,8 +760,11 @@ function SceneContent({
   const objectDragRef = useRef<ObjectDragSession | null>(null);
   const shapeResizeRef = useRef<ShapeResizeSession | null>(null);
   const shapeRotateRef = useRef<ShapeRotateSession | null>(null);
+  const instanceRotateRef = useRef<InstanceRotateSession | null>(null);
+  const instanceScaleRef = useRef<InstanceScaleSession | null>(null);
   const openingDragRef = useRef<OpeningDragSession | null>(null);
   const segmentDragRef = useRef<SegmentDisplacementSession | null>(null);
+  const connectorDragRef = useRef<ConnectorBoundarySession | null>(null);
   const pointerScratchRef = useRef({
     pointer: new THREE.Vector2(),
     raycaster: new THREE.Raycaster(),
@@ -582,8 +772,15 @@ function SceneContent({
   });
   const [hoveredWall, setHoveredWall] = useState<WallId | null>(null);
   const { camera, gl, scene } = useThree();
+  // While a WebXR session is presenting, the headset drives the camera —
+  // OrbitControls and the FirstPersonController must not also try to move
+  // it, or the user's view will jitter or be locked at the wrong height.
+  const xrPresenting = useXR((state) => state.session != null);
+  const firstPersonControlsActive = firstPersonActive && !xrPresenting;
   useEffect(() => {
-    registerSceneCapture(() => captureLayoutPano(scene, gl, roomRef.current));
+    registerSceneCapture(() =>
+      captureLayoutPano(scene, gl, roomRef.current, wallSegmentsRef.current),
+    );
   }, [gl, registerSceneCapture, scene]);
 
   useLayoutEffect(() => {
@@ -644,53 +841,23 @@ function SceneContent({
 
   useEffect(() => {
     const element = gl.domElement;
-
-    function setLeftOrbitEnabled(enabled: boolean) {
-      const controls = orbitControlsRef.current;
-      if (!controls) return;
-      if (firstPersonActive) {
-        controls.enabled = false;
-        return;
-      }
-      controls.mouseButtons = enabled ? ALT_ORBIT_MOUSE_BUTTONS : EDITING_MOUSE_BUTTONS;
-    }
-
-    function handlePointerDown(event: PointerEvent) {
-      setLeftOrbitEnabled(event.button === 0 && event.altKey);
-    }
-
-    function resetMouseButtons() {
-      setLeftOrbitEnabled(false);
-    }
-
     function preventContextMenu(event: MouseEvent) {
       event.preventDefault();
     }
-
-    element.addEventListener("pointerdown", handlePointerDown, { capture: true });
     element.addEventListener("contextmenu", preventContextMenu);
-    window.addEventListener("pointerup", resetMouseButtons, { capture: true });
-    window.addEventListener("pointercancel", resetMouseButtons, { capture: true });
-    window.addEventListener("blur", resetMouseButtons);
-
-    return () => {
-      element.removeEventListener("pointerdown", handlePointerDown, { capture: true });
-      element.removeEventListener("contextmenu", preventContextMenu);
-      window.removeEventListener("pointerup", resetMouseButtons, { capture: true });
-      window.removeEventListener("pointercancel", resetMouseButtons, { capture: true });
-      window.removeEventListener("blur", resetMouseButtons);
-    };
-  }, [firstPersonActive, gl.domElement, viewMode]);
+    return () => element.removeEventListener("contextmenu", preventContextMenu);
+  }, [gl.domElement]);
 
   useEffect(() => {
     const element = gl.domElement;
 
     function handleTrackpadWheel(event: WheelEvent) {
       const controls = orbitControlsRef.current;
-      if (firstPersonActive || !controls?.enabled || event.ctrlKey) return;
+      if (firstPersonActive || !controls?.enabled || event.ctrlKey || !isTrackpadWheel(event)) return;
       if (
         shapeResizeRef.current ||
         shapeRotateRef.current ||
+        instanceRotateRef.current ||
         objectDragRef.current ||
         wallDragRef.current ||
         openingDragRef.current ||
@@ -718,7 +885,7 @@ function SceneContent({
     return () => {
       element.removeEventListener("wheel", handleTrackpadWheel, { capture: true });
     };
-  }, [camera, firstPersonActive, gl.domElement, viewMode]);
+  }, [camera, firstPersonActive, gl.domElement]);
 
   const projectPointerToFloor = useCallback(
     (clientX: number, clientY: number): Vec3 | null => {
@@ -763,22 +930,62 @@ function SceneContent({
     [camera, gl.domElement],
   );
 
+  const projectPointerToConnectorPlane = useCallback(
+    (
+      connector: WallConnectorRef,
+      clientX: number,
+      clientY: number,
+    ): { offsetAlong: number; y: number; descriptor: WallConnectorDescriptor } | null => {
+      const descriptor = connectorDescriptor(roomRef.current, wallSegmentsRef.current, connector);
+      if (!descriptor) return null;
+
+      const rect = gl.domElement.getBoundingClientRect();
+      const ndc = new THREE.Vector2(
+        ((clientX - rect.left) / rect.width) * 2 - 1,
+        -((clientY - rect.top) / rect.height) * 2 + 1,
+      );
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(ndc, camera);
+      const normal = descriptor.axis === "z"
+        ? new THREE.Vector3(1, 0, 0)
+        : new THREE.Vector3(0, 0, 1);
+      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(
+        normal,
+        new THREE.Vector3(descriptor.position[0], 0, descriptor.position[2]),
+      );
+      const target = new THREE.Vector3();
+      const hit = ray.ray.intersectPlane(plane, target);
+      if (!hit) return null;
+
+      const coord = descriptor.axis === "z" ? target.z : target.x;
+      return {
+        offsetAlong: (coord - descriptor.midCoord) * descriptor.directionSign,
+        y: target.y,
+        descriptor,
+      };
+    },
+    [camera, gl.domElement],
+  );
+
   useEffect(() => {
     setProjector(projectPointerToFloor);
   }, [projectPointerToFloor, setProjector]);
 
+  // Eagerly warm the GLTF cache for every ready asset so the drag ghost shows
+  // the real model immediately instead of the Suspense primitive fallback.
   useEffect(() => {
-    registerFirstPersonLock(() => {
-      const controls = pointerLockControlsRef.current;
-      if (!controls) return;
-      controls.connect(gl.domElement);
-      controls.lock();
-    });
-
-    return () => {
-      registerFirstPersonLock(() => undefined);
-    };
-  }, [gl.domElement, registerFirstPersonLock]);
+    const allAssets: FurnitureAsset[] = [...assets];
+    if (assetById) {
+      for (const [id, a] of assetById) {
+        if (!allAssets.some((x) => x.id === id)) allAssets.push(a);
+      }
+    }
+    for (const a of allAssets) {
+      if (a.modelUrl && (a.status === "ready" || a.status === "mock")) {
+        useGLTF.preload(proxiedModelUrl(a.modelUrl));
+      }
+    }
+  }, [assets, assetById]);
 
   useEffect(() => {
     const element = gl.domElement;
@@ -879,6 +1086,97 @@ function SceneContent({
   useEffect(() => {
     const element = gl.domElement;
 
+    function applyInstanceScale() {
+      const session = instanceScaleRef.current;
+      if (!session) return;
+
+      session.rafId = null;
+      const instance = instancesRef.current.find((item) => item.id === session.instanceId);
+      if (!instance) return;
+
+      let nextAxisScale = session.startScale[session.axis];
+      if (session.axis === 1) {
+        nextAxisScale = session.startScale[1] + session.sign * (session.startClientY - session.latestClientY) * 0.0125;
+      } else {
+        if (session.screenAxisLengthSq < 16) return;
+        const deltaX = session.latestClientX - session.startClientX;
+        const deltaY = session.latestClientY - session.startClientY;
+        const meters =
+          (deltaX * session.screenAxisX + deltaY * session.screenAxisY) / session.screenAxisLengthSq;
+        const baseSize = Math.max(0.1, session.baseSize[session.axis]);
+        nextAxisScale = session.startScale[session.axis] + session.sign * (2 * meters) / baseSize;
+      }
+
+      const nextScale: Vec3 = [...session.startScale];
+      nextScale[session.axis] = Math.max(0.05, Math.abs(nextAxisScale));
+
+      onInstancesChangeRef.current(
+        instancesRef.current.map((item) =>
+          item.id === session.instanceId ? { ...item, position: [item.position[0], 0, item.position[2]], scale: nextScale } : item,
+        ),
+      );
+    }
+
+    function scheduleInstanceScaleUpdate() {
+      const session = instanceScaleRef.current;
+      if (!session || session.rafId !== null) return;
+      session.rafId = window.requestAnimationFrame(applyInstanceScale);
+    }
+
+    function endInstanceScale(pointerId?: number) {
+      const session = instanceScaleRef.current;
+      if (!session || (pointerId !== undefined && session.pointerId !== pointerId)) return;
+
+      if (session.rafId !== null) {
+        window.cancelAnimationFrame(session.rafId);
+      }
+
+      try {
+        if (element.hasPointerCapture(session.pointerId)) {
+          element.releasePointerCapture(session.pointerId);
+        }
+      } catch {
+        // Pointer capture can already be gone after browser-level cancellation.
+      }
+
+      const controls = orbitControlsRef.current;
+      if (controls) controls.enabled = session.previousControlsEnabled;
+      instanceScaleRef.current = null;
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      const session = instanceScaleRef.current;
+      if (!session || session.pointerId !== event.pointerId) return;
+      session.latestClientX = event.clientX;
+      session.latestClientY = event.clientY;
+      scheduleInstanceScaleUpdate();
+    }
+
+    function handlePointerUp(event: PointerEvent) {
+      endInstanceScale(event.pointerId);
+    }
+
+    function handleBlur() {
+      endInstanceScale();
+    }
+
+    window.addEventListener("pointermove", handlePointerMove, { capture: true });
+    window.addEventListener("pointerup", handlePointerUp, { capture: true });
+    window.addEventListener("pointercancel", handlePointerUp, { capture: true });
+    window.addEventListener("blur", handleBlur);
+
+    return () => {
+      endInstanceScale();
+      window.removeEventListener("pointermove", handlePointerMove, { capture: true });
+      window.removeEventListener("pointerup", handlePointerUp, { capture: true });
+      window.removeEventListener("pointercancel", handlePointerUp, { capture: true });
+      window.removeEventListener("blur", handleBlur);
+    };
+  }, [gl.domElement, projectPointerToFloor]);
+
+  useEffect(() => {
+    const element = gl.domElement;
+
     function applyObjectDrag() {
       const session = objectDragRef.current;
       if (!session) return;
@@ -900,7 +1198,7 @@ function SceneContent({
       if (session.target.type === "furniture") {
         onInstancesChangeRef.current(
           instancesRef.current.map((instance) =>
-            instance.id === session.target.id ? { ...instance, position: nextPosition } : instance,
+            instance.id === session.target.id ? { ...instance, position: [nextPosition[0], 0, nextPosition[2]] } : instance,
           ),
         );
         return;
@@ -917,7 +1215,9 @@ function SceneContent({
 
       onShapesChangeRef.current(
         shapesRef.current.map((shape) =>
-          shape.id === session.target.id ? { ...shape, position: nextPosition } : shape,
+          shape.id === session.target.id
+            ? { ...shape, position: [nextPosition[0], groundedShapeY(shape.kind, shape.scale[1]), nextPosition[2]] }
+            : shape,
         ),
       );
     }
@@ -996,23 +1296,36 @@ function SceneContent({
 
       let nextAxisScale = session.startScale[session.axis];
       if (session.axis === 1) {
-        nextAxisScale = session.startScale[1] + session.sign * (session.startClientY - session.latestClientY) * 0.025;
+        nextAxisScale = session.startScale[1] + session.sign * (session.startClientY - session.latestClientY) * 0.0125;
       } else {
-        const nextLocalValue = shapeLocalPointerValue(
-          shape,
-          session.axis,
-          session.latestClientX,
-          session.latestClientY,
-          projectPointerToFloor,
-        );
-        if (nextLocalValue === null) return;
-        nextAxisScale = session.startScale[session.axis] + session.sign * 2 * (nextLocalValue - session.startLocalValue);
+        const sensitivity = session.axis === 2 ? 1 : 2;
+        if (session.screenAxisLengthSq >= 16) {
+          const deltaX = session.latestClientX - session.startClientX;
+          const deltaY = session.latestClientY - session.startClientY;
+          const meters =
+            (deltaX * session.screenAxisX + deltaY * session.screenAxisY) / session.screenAxisLengthSq;
+          nextAxisScale = session.startScale[session.axis] + session.sign * sensitivity * meters;
+        } else {
+          const nextLocalValue = shapeLocalPointerValue(
+            shape,
+            session.axis,
+            session.latestClientX,
+            session.latestClientY,
+            projectPointerToFloor,
+          );
+          if (nextLocalValue === null) return;
+          nextAxisScale = session.startScale[session.axis] + session.sign * sensitivity * (nextLocalValue - session.startLocalValue);
+        }
       }
 
       const nextScale: Vec3 = [...session.startScale];
       nextScale[session.axis] = Math.max(0.05, Math.abs(nextAxisScale));
       onShapesChangeRef.current(
-        shapesRef.current.map((item) => (item.id === session.shapeId ? { ...item, scale: nextScale } : item)),
+        shapesRef.current.map((item) =>
+          item.id === session.shapeId
+            ? { ...item, position: [item.position[0], groundedShapeY(item.kind, nextScale[1]), item.position[2]], scale: nextScale }
+            : item,
+        ),
       );
     }
 
@@ -1159,6 +1472,106 @@ function SceneContent({
     };
   }, [gl.domElement, projectPointerToFloor]);
 
+  // Drag-to-rotate for furniture instances via the base ring. Snaps to
+  // 15-degree increments around the world-Y (vertical) axis.
+  useEffect(() => {
+    const element = gl.domElement;
+    const SNAP_RADIANS = Math.PI / 12; // 15°
+
+    function applyInstanceRotate() {
+      const session = instanceRotateRef.current;
+      if (!session) return;
+
+      session.rafId = null;
+      const instance = instancesRef.current.find((item) => item.id === session.instanceId);
+      if (!instance) return;
+
+      const nextAngle = pointerAngleAroundPosition(
+        instance.position,
+        session.latestClientX,
+        session.latestClientY,
+        projectPointerToFloor,
+      );
+      if (nextAngle === null) return;
+
+      // Continuous Y-rotation following the pointer, then snap to 15° steps.
+      const continuous =
+        session.startRotation[1] - shortestAngleDelta(nextAngle, session.startAngle);
+      const snapped = Math.round(continuous / SNAP_RADIANS) * SNAP_RADIANS;
+      if (Math.abs(snapped - instance.rotation[1]) < 1e-4) return;
+
+      const nextRotation: Vec3 = [
+        session.startRotation[0],
+        snapped,
+        session.startRotation[2],
+      ];
+      onInstancesChangeRef.current(
+        instancesRef.current.map((item) =>
+          item.id === session.instanceId ? { ...item, rotation: nextRotation } : item,
+        ),
+      );
+    }
+
+    function scheduleInstanceRotateUpdate() {
+      const session = instanceRotateRef.current;
+      if (!session || session.rafId !== null) return;
+      session.rafId = window.requestAnimationFrame(applyInstanceRotate);
+    }
+
+    function endInstanceRotate(pointerId?: number) {
+      const session = instanceRotateRef.current;
+      if (!session || (pointerId !== undefined && session.pointerId !== pointerId)) return;
+
+      if (session.rafId !== null) {
+        window.cancelAnimationFrame(session.rafId);
+      }
+
+      try {
+        if (element.hasPointerCapture(session.pointerId)) {
+          element.releasePointerCapture(session.pointerId);
+        }
+      } catch {
+        // Pointer capture can already be gone after browser-level cancellation.
+      }
+
+      const controls = orbitControlsRef.current;
+      if (controls) {
+        controls.enabled = session.previousControlsEnabled;
+      }
+
+      instanceRotateRef.current = null;
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      const session = instanceRotateRef.current;
+      if (!session || session.pointerId !== event.pointerId) return;
+      session.latestClientX = event.clientX;
+      session.latestClientY = event.clientY;
+      scheduleInstanceRotateUpdate();
+    }
+
+    function handlePointerUp(event: PointerEvent) {
+      endInstanceRotate(event.pointerId);
+    }
+
+    function handleBlur() {
+      endInstanceRotate();
+    }
+
+    window.addEventListener("pointermove", handlePointerMove, { capture: true });
+    window.addEventListener("pointerup", handlePointerUp, { capture: true });
+    window.addEventListener("pointercancel", handlePointerUp, { capture: true });
+    window.addEventListener("blur", handleBlur);
+
+    return () => {
+      endInstanceRotate();
+      window.removeEventListener("pointermove", handlePointerMove, { capture: true });
+      window.removeEventListener("pointerup", handlePointerUp, { capture: true });
+      window.removeEventListener("pointercancel", handlePointerUp, { capture: true });
+      window.removeEventListener("blur", handleBlur);
+    };
+  }, [gl.domElement, projectPointerToFloor]);
+
   useEffect(() => {
     const element = gl.domElement;
 
@@ -1166,19 +1579,40 @@ function SceneContent({
       const session = openingDragRef.current;
       if (!session) return;
       session.rafId = null;
-      const projection = projectPointerToWallPlane(session.wall, session.latestClientX, session.latestClientY);
+      const connectorProjection = session.connector
+        ? projectPointerToConnectorPlane(session.connector, session.latestClientX, session.latestClientY)
+        : null;
+      const projection = connectorProjection ?? projectPointerToWallPlane(session.wall, session.latestClientX, session.latestClientY);
       if (!projection) return;
 
       const room = roomRef.current;
       if (session.kind === "door") {
         const door = doorsRef.current.find((item) => item.id === session.id);
         if (!door) return;
-        const nextOffset = clampWallOffset(
-          room,
-          session.wall,
-          projection.offsetAlong - session.grabOffsetAlong,
-          door.width,
-        );
+        if (session.mode === "scale") {
+          const widthFromDelta = session.startWidth + Math.abs(projection.offsetAlong - session.startPointerAlong) * 2;
+          const nextWidth = connectorProjection
+            ? Math.min(connectorProjection.descriptor.length * 0.95, Math.max(0.25, widthFromDelta))
+            : clampOpeningWidthOnWallRun(room, wallSegmentsRef.current, session.wall, session.startOffset, widthFromDelta);
+          const nextHeight = Math.min(room.height - 0.05, Math.max(0.6, session.startHeight + projection.y - session.startPointerY));
+          onDoorsChangeRef.current(
+            doorsRef.current.map((item) =>
+              item.id === session.id ? { ...item, width: nextWidth, height: nextHeight } : item,
+            ),
+          );
+          return;
+        }
+        const rawOffset = projection.offsetAlong - session.grabOffsetAlong;
+        const nextOffset = connectorProjection
+          ? clampConnectorOffset(connectorProjection.descriptor, rawOffset, door.width)
+          : clampOpeningOffsetOnWallRun(
+              room,
+              wallSegmentsRef.current,
+              session.wall,
+              door.offset,
+              rawOffset,
+              door.width,
+            );
         if (nextOffset === door.offset) return;
         onDoorsChangeRef.current(
           doorsRef.current.map((item) =>
@@ -1190,12 +1624,30 @@ function SceneContent({
 
       const window = windowsRef.current.find((item) => item.id === session.id);
       if (!window) return;
-      const nextOffset = clampWallOffset(
-        room,
-        session.wall,
-        projection.offsetAlong - session.grabOffsetAlong,
-        window.width,
-      );
+      if (session.mode === "scale") {
+        const widthFromDelta = session.startWidth + Math.abs(projection.offsetAlong - session.startPointerAlong) * 2;
+        const nextWidth = connectorProjection
+          ? Math.min(connectorProjection.descriptor.length * 0.95, Math.max(0.25, widthFromDelta))
+          : clampOpeningWidthOnWallRun(room, wallSegmentsRef.current, session.wall, session.startOffset, widthFromDelta);
+        const nextHeight = Math.min(room.height - window.baseY - 0.05, Math.max(0.3, session.startHeight + projection.y - session.startPointerY));
+        onWindowsChangeRef.current(
+          windowsRef.current.map((item) =>
+            item.id === session.id ? { ...item, width: nextWidth, height: nextHeight } : item,
+          ),
+        );
+        return;
+      }
+      const rawOffset = projection.offsetAlong - session.grabOffsetAlong;
+      const nextOffset = connectorProjection
+        ? clampConnectorOffset(connectorProjection.descriptor, rawOffset, window.width)
+        : clampOpeningOffsetOnWallRun(
+            room,
+            wallSegmentsRef.current,
+            session.wall,
+            window.offset,
+            rawOffset,
+            window.width,
+          );
       const nextBaseY = clampWindowVerticalOffset(
         room,
         projection.y - session.grabOffsetVertical,
@@ -1259,7 +1711,7 @@ function SceneContent({
       window.removeEventListener("pointercancel", handlePointerUp, { capture: true });
       window.removeEventListener("blur", handleBlur);
     };
-  }, [gl.domElement, projectPointerToWallPlane]);
+  }, [gl.domElement, projectPointerToConnectorPlane, projectPointerToWallPlane]);
 
   useEffect(() => {
     const element = gl.domElement;
@@ -1332,6 +1784,82 @@ function SceneContent({
 
     return () => {
       endSegmentDrag();
+      window.removeEventListener("pointermove", handlePointerMove, { capture: true });
+      window.removeEventListener("pointerup", handlePointerUp, { capture: true });
+      window.removeEventListener("pointercancel", handlePointerUp, { capture: true });
+      window.removeEventListener("blur", handleBlur);
+    };
+  }, [gl.domElement]);
+
+  useEffect(() => {
+    const element = gl.domElement;
+
+    function applyConnectorDrag() {
+      const session = connectorDragRef.current;
+      if (!session) return;
+      session.rafId = null;
+      if (session.screenAxisLengthSq < 0.0001) return;
+
+      const room = roomRef.current;
+      const segmentation = wallSegmentsRef.current;
+      const length = wallAxisLength(room, session.connector.wall);
+      if (length <= 0) return;
+
+      const deltaX = session.latestClientX - session.startClientX;
+      const deltaY = session.latestClientY - session.startClientY;
+      const meters =
+        (deltaX * session.screenAxisX + deltaY * session.screenAxisY) / session.screenAxisLengthSq;
+      const nextFraction = session.startFraction + (meters - session.grabOffset) / length;
+      const next = setConnectorBoundaryFraction(segmentation, session.connector, nextFraction);
+      if (next === segmentation) return;
+      onWallSegmentsChangeRef.current(next);
+    }
+
+    function scheduleConnectorDragUpdate() {
+      const session = connectorDragRef.current;
+      if (!session || session.rafId !== null) return;
+      session.rafId = window.requestAnimationFrame(applyConnectorDrag);
+    }
+
+    function endConnectorDrag(pointerId?: number) {
+      const session = connectorDragRef.current;
+      if (!session || (pointerId !== undefined && session.pointerId !== pointerId)) return;
+      if (session.rafId !== null) window.cancelAnimationFrame(session.rafId);
+      try {
+        if (element.hasPointerCapture(session.pointerId)) {
+          element.releasePointerCapture(session.pointerId);
+        }
+      } catch {
+        // ignore release errors
+      }
+      const controls = orbitControlsRef.current;
+      if (controls) controls.enabled = session.previousControlsEnabled;
+      connectorDragRef.current = null;
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      const session = connectorDragRef.current;
+      if (!session || session.pointerId !== event.pointerId) return;
+      session.latestClientX = event.clientX;
+      session.latestClientY = event.clientY;
+      scheduleConnectorDragUpdate();
+    }
+
+    function handlePointerUp(event: PointerEvent) {
+      endConnectorDrag(event.pointerId);
+    }
+
+    function handleBlur() {
+      endConnectorDrag();
+    }
+
+    window.addEventListener("pointermove", handlePointerMove, { capture: true });
+    window.addEventListener("pointerup", handlePointerUp, { capture: true });
+    window.addEventListener("pointercancel", handlePointerUp, { capture: true });
+    window.addEventListener("blur", handleBlur);
+
+    return () => {
+      endConnectorDrag();
       window.removeEventListener("pointermove", handlePointerMove, { capture: true });
       window.removeEventListener("pointerup", handlePointerUp, { capture: true });
       window.removeEventListener("pointercancel", handlePointerUp, { capture: true });
@@ -1474,7 +2002,7 @@ function SceneContent({
     event: ThreeEvent<PointerEvent>,
   ) {
     if (viewMode !== "blockout") return;
-    if (tool !== "select" && tool !== "move") return;
+    if (tool !== "select" && tool !== "move" && tool !== "scale") return;
     if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
 
     const point = projectPointerToFloor(event.clientX, event.clientY);
@@ -1517,6 +2045,7 @@ function SceneContent({
     if (startLocalValue === null) return;
 
     const controls = orbitControlsRef.current;
+    const screenAxis = screenAxisForLocalAxis(shape.position, shape.rotation, axis, camera, gl.domElement);
     shapeResizeRef.current = {
       shapeId: shape.id,
       pointerId: event.pointerId,
@@ -1524,6 +2053,10 @@ function SceneContent({
       sign,
       startScale: [...shape.scale],
       startLocalValue,
+      screenAxisX: screenAxis.x,
+      screenAxisY: screenAxis.y,
+      screenAxisLengthSq: screenAxis.lengthSq,
+      startClientX: event.clientX,
       startClientY: event.clientY,
       latestClientX: event.clientX,
       latestClientY: event.clientY,
@@ -1543,6 +2076,86 @@ function SceneContent({
     }
 
     onSelect({ type: "shape", id: shape.id });
+  }
+
+  function handleInstanceScalePointerDown(
+    instance: FurnitureInstance,
+    baseSize: Vec3,
+    axis: ShapeResizeAxis,
+    sign: -1 | 1,
+    event: ThreeEvent<PointerEvent>,
+  ) {
+    if (viewMode !== "blockout") return;
+    if (tool !== "select" && tool !== "move" && tool !== "scale") return;
+    if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
+
+    event.stopPropagation();
+
+    const controls = orbitControlsRef.current;
+    const screenAxis = screenAxisForLocalAxis(instance.position, instance.rotation, axis, camera, gl.domElement);
+    instanceScaleRef.current = {
+      instanceId: instance.id,
+      pointerId: event.pointerId,
+      axis,
+      sign,
+      startScale: [...instance.scale],
+      baseSize,
+      screenAxisX: screenAxis.x,
+      screenAxisY: screenAxis.y,
+      screenAxisLengthSq: screenAxis.lengthSq,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      latestClientX: event.clientX,
+      latestClientY: event.clientY,
+      rafId: null,
+      previousControlsEnabled: controls?.enabled ?? true,
+    };
+
+    objectDragRef.current = null;
+    if (controls) controls.enabled = false;
+    try {
+      gl.domElement.setPointerCapture(event.pointerId);
+    } catch {
+      // Some browsers can reject capture if the native pointer sequence has already ended.
+    }
+    onSelect({ type: "furniture", id: instance.id });
+  }
+
+  function handleInstanceRotatePointerDown(instance: FurnitureInstance, event: ThreeEvent<PointerEvent>) {
+    if (viewMode !== "blockout") return;
+    if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
+
+    event.stopPropagation();
+    const startAngle = pointerAngleAroundPosition(
+      instance.position,
+      event.clientX,
+      event.clientY,
+      projectPointerToFloor,
+    );
+    if (startAngle === null) return;
+
+    const controls = orbitControlsRef.current;
+    instanceRotateRef.current = {
+      instanceId: instance.id,
+      pointerId: event.pointerId,
+      startRotation: [...instance.rotation] as Vec3,
+      startAngle,
+      latestClientX: event.clientX,
+      latestClientY: event.clientY,
+      rafId: null,
+      previousControlsEnabled: controls?.enabled ?? true,
+    };
+
+    objectDragRef.current = null;
+    if (controls) controls.enabled = false;
+
+    try {
+      gl.domElement.setPointerCapture(event.pointerId);
+    } catch {
+      // Some browsers can reject capture if the native pointer sequence has already ended.
+    }
+
+    onSelect({ type: "furniture", id: instance.id });
   }
 
   function handleShapeRotatePointerDown(shape: CustomShape, event: ThreeEvent<PointerEvent>) {
@@ -1585,6 +2198,7 @@ function SceneContent({
     kind: OpeningKind,
     target: Door | WindowOpening,
     event: ThreeEvent<PointerEvent>,
+    forcedMode?: OpeningDragSession["mode"],
   ) {
     if (viewMode !== "blockout") return;
     if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
@@ -1592,9 +2206,12 @@ function SceneContent({
     event.stopPropagation();
     onSelect({ type: kind, id: target.id });
 
-    if (tool !== "select" && tool !== "move") return;
+    if (!forcedMode && tool !== "select" && tool !== "move" && tool !== "scale") return;
 
-    const projection = projectPointerToWallPlane(target.wall, event.clientX, event.clientY);
+    const connectorProjection = target.connector
+      ? projectPointerToConnectorPlane(target.connector, event.clientX, event.clientY)
+      : null;
+    const projection = connectorProjection ?? projectPointerToWallPlane(target.wall, event.clientX, event.clientY);
     if (!projection) return;
 
     const baseY = kind === "door" ? 0 : (target as WindowOpening).baseY;
@@ -1604,10 +2221,16 @@ function SceneContent({
     openingDragRef.current = {
       kind,
       id: target.id,
+      mode: forcedMode ?? (tool === "scale" ? "scale" : "move"),
       pointerId: event.pointerId,
       wall: target.wall,
+      connector: target.connector,
       startOffset: target.offset,
       startBaseY: baseY,
+      startWidth: target.width,
+      startHeight: target.height,
+      startPointerAlong: projection.offsetAlong,
+      startPointerY: projection.y,
       grabOffsetAlong: projection.offsetAlong - target.offset,
       grabOffsetVertical: grabVertical,
       latestClientX: event.clientX,
@@ -1628,6 +2251,37 @@ function SceneContent({
     if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
 
     event.stopPropagation();
+
+    if (tool === "add-door") {
+      const room = roomRef.current;
+      const projection = projectPointerToWallPlane(wall, event.clientX, event.clientY);
+      const newDoor = createDoor(room, wall);
+      newDoor.width = Math.min(newDoor.width, Math.max(0.35, (segment.end - segment.start) * wallAxisLength(room, wall) * 0.9));
+      newDoor.offset = clampSegmentOffset(room, wall, segment, projection?.offsetAlong ?? 0, newDoor.width);
+      onDoorsChangeRef.current([...doorsRef.current, newDoor]);
+      onSelect({ type: "door", id: newDoor.id });
+      onToolChange("select");
+      return;
+    }
+
+    if (tool === "add-window") {
+      const room = roomRef.current;
+      const projection = projectPointerToWallPlane(wall, event.clientX, event.clientY);
+      const newWindow = createWindowOpening(room, wall);
+      newWindow.width = Math.min(newWindow.width, Math.max(0.35, (segment.end - segment.start) * wallAxisLength(room, wall) * 0.9));
+      newWindow.offset = clampSegmentOffset(room, wall, segment, projection?.offsetAlong ?? 0, newWindow.width);
+      if (projection) {
+        newWindow.baseY = clampWindowVerticalOffset(
+          room,
+          (projection.y ?? newWindow.baseY) - newWindow.height / 2,
+          newWindow.height,
+        );
+      }
+      onWindowsChangeRef.current([...windowsRef.current, newWindow]);
+      onSelect({ type: "window", id: newWindow.id });
+      onToolChange("select");
+      return;
+    }
 
     if (tool === "cut-wall") {
       const room = roomRef.current;
@@ -1651,6 +2305,89 @@ function SceneContent({
     if (tool !== "select" && tool !== "move") return;
 
     beginSegmentDrag(segment.id, wall, segment.displacement, event);
+  }
+
+  function handleConnectorPointerDown(connector: WallConnectorRef, event: ThreeEvent<PointerEvent>) {
+    if (viewMode !== "blockout") return;
+    if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
+
+    event.stopPropagation();
+    const projection = projectPointerToConnectorPlane(connector, event.clientX, event.clientY);
+    if (!projection) return;
+
+    if (tool === "add-door") {
+      const newDoor = createDoor(roomRef.current, connector.wall);
+      newDoor.connector = connector;
+      newDoor.width = Math.min(newDoor.width, projection.descriptor.length * 0.9);
+      newDoor.offset = clampConnectorOffset(projection.descriptor, projection.offsetAlong, newDoor.width);
+      onDoorsChangeRef.current([...doorsRef.current, newDoor]);
+      onSelect({ type: "door", id: newDoor.id });
+      onToolChange("select");
+      return;
+    }
+
+    if (tool === "add-window") {
+      const newWindow = createWindowOpening(roomRef.current, connector.wall);
+      newWindow.connector = connector;
+      newWindow.width = Math.min(newWindow.width, projection.descriptor.length * 0.9);
+      newWindow.offset = clampConnectorOffset(projection.descriptor, projection.offsetAlong, newWindow.width);
+      newWindow.baseY = clampWindowVerticalOffset(
+        roomRef.current,
+        projection.y - newWindow.height / 2,
+        newWindow.height,
+      );
+      onWindowsChangeRef.current([...windowsRef.current, newWindow]);
+      onSelect({ type: "window", id: newWindow.id });
+      onToolChange("select");
+      return;
+    }
+
+    onSelect({ type: "wall-segment", wall: connector.wall, id: connector.segmentId });
+    if (tool !== "select" && tool !== "move") return;
+
+    if (!projection.descriptor.hasNeighbor) {
+      beginSegmentDrag(
+        connector.segmentId,
+        connector.wall,
+        projection.descriptor.segment.displacement,
+        event,
+      );
+      return;
+    }
+
+    beginConnectorDrag(connector, projection.descriptor.fraction, event);
+  }
+
+  function beginConnectorDrag(
+    connector: WallConnectorRef,
+    startFraction: number,
+    event: ThreeEvent<PointerEvent>,
+  ) {
+    const descriptor = connectorDescriptor(roomRef.current, wallSegmentsRef.current, connector);
+    if (!descriptor) return;
+    const screenAxis = screenAxisForConnectorBoundary(connector.wall, descriptor.position, camera, gl.domElement);
+    const controls = orbitControlsRef.current;
+    connectorDragRef.current = {
+      connector,
+      pointerId: event.pointerId,
+      startFraction,
+      grabOffset: 0,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      screenAxisX: screenAxis.x,
+      screenAxisY: screenAxis.y,
+      screenAxisLengthSq: screenAxis.lengthSq,
+      latestClientX: event.clientX,
+      latestClientY: event.clientY,
+      rafId: null,
+      previousControlsEnabled: controls?.enabled ?? true,
+    };
+    if (controls) controls.enabled = false;
+    try {
+      gl.domElement.setPointerCapture(event.pointerId);
+    } catch {
+      // ignore capture errors
+    }
   }
 
   function beginSegmentDrag(
@@ -1695,29 +2432,14 @@ function SceneContent({
       <OrbitControls
         ref={orbitControlsRef}
         makeDefault
-        enabled={!firstPersonActive}
-        enableDamping
-        dampingFactor={0.08}
+        enabled={!firstPersonControlsActive && !xrPresenting}
         maxPolarAngle={Math.PI / 2.05}
-        mouseButtons={EDITING_MOUSE_BUTTONS}
+        rotateSpeed={1}
+        mouseButtons={VIEWPORT_MOUSE_BUTTONS}
         touches={VIEWPORT_TOUCHES}
       />
-      <PointerLockControls
-        ref={pointerLockControlsRef}
-        domElement={gl.domElement}
-        enabled={firstPersonActive}
-        makeDefault={firstPersonActive}
-        pointerSpeed={0.82}
-        minPolarAngle={Math.PI / 3.2}
-        maxPolarAngle={Math.PI / 1.55}
-        onUnlock={() => onFirstPersonActiveChange(false)}
-      />
-      <FirstPersonController
-        active={firstPersonActive}
-        room={room}
-        pointerLockControls={pointerLockControlsRef}
-        onActiveChange={onFirstPersonActiveChange}
-      />
+      <FirstPersonController active={firstPersonControlsActive} />
+      <VrSplatRig active={firstPersonActive && xrPresenting} />
       {generatedAvailable && marble.spzUrl ? (
         <MarbleSplatScene
           url={proxiedMarbleSpzUrl(marble.spzUrl)}
@@ -1744,9 +2466,11 @@ function SceneContent({
           onWallPointerOut={(wall) => setHoveredWall((current) => (current === wall ? null : current))}
           onFloorPointerDown={handleFloorPointerDown}
           onSegmentPointerDown={handleSegmentPointerDown}
+          onConnectorPointerDown={handleConnectorPointerDown}
         />
         {instances.map((instance) => {
           const asset = assetById?.get(instance.assetId) ?? assets.find((item) => item.id === instance.assetId);
+          const resizeSize = furnitureResizeHandleSize(asset);
           return (
             <FurnitureNode
               key={instance.id}
@@ -1762,11 +2486,26 @@ function SceneContent({
               onDragStart={(event) =>
                 handleObjectPointerDown({ type: "furniture", id: instance.id }, instance.position, event)
               }
+              onRotateStart={(event) => handleInstanceRotatePointerDown(instance, event)}
+              onScaleStart={(axis, sign, event) => handleInstanceScalePointerDown(instance, resizeSize, axis, sign, event)}
               onTransformActiveChange={handleTransformActiveChange}
               onChange={updateInstance}
+              onMeasured={
+                onAssetMeasured && asset
+                  ? (footprint) => onAssetMeasured(asset.id, footprint)
+                  : undefined
+              }
             />
           );
         })}
+        {dragGhost && viewMode === "blockout" && (
+          <DragGhostNode
+            asset={dragGhost.asset}
+            position={dragGhost.position}
+            room={room}
+            wallSegments={wallSegments}
+          />
+        )}
         {shapes.map((shape) => (
           <ShapeNode
             key={shape.id}
@@ -1808,6 +2547,7 @@ function SceneContent({
             hovered={viewMode === "blockout" && hovered?.type === "door" && hovered.id === door.id}
             opacity={blockoutOpacity}
             onPointerDown={(event) => handleOpeningPointerDown("door", door, event)}
+            onResizePointerDown={(event) => handleOpeningPointerDown("door", door, event, "scale")}
             onPointerOver={() => {}}
             onPointerOut={() => {}}
           />
@@ -1822,14 +2562,15 @@ function SceneContent({
             hovered={viewMode === "blockout" && hovered?.type === "window" && hovered.id === window.id}
             opacity={blockoutOpacity}
             onPointerDown={(event) => handleOpeningPointerDown("window", window, event)}
+            onResizePointerDown={(event) => handleOpeningPointerDown("window", window, event, "scale")}
             onPointerOver={() => {}}
             onPointerOut={() => {}}
           />
         ))}
       </group>
       {viewMode === "blockout" ? (
-        <Html position={[room.minX, 0.04, room.maxZ + 0.22]} center zIndexRange={[0, 0]}>
-          <RoomDimensionBadge room={room} onRoomChange={onRoomChange} />
+        <Html position={[floorBounds(room, wallSegments).minX, 0.04, floorBounds(room, wallSegments).maxZ + 0.22]} center zIndexRange={[0, 0]}>
+          <RoomDimensionBadge room={room} wallSegments={wallSegments} onRoomChange={onRoomChange} />
         </Html>
       ) : null}
     </>
@@ -1850,6 +2591,7 @@ function BlockoutReferenceLayer({
   onWallPointerOut,
   onFloorPointerDown,
   onSegmentPointerDown,
+  onConnectorPointerDown,
 }: {
   room: RoomBounds;
   wallSegments: WallSegmentation;
@@ -1864,6 +2606,7 @@ function BlockoutReferenceLayer({
   onWallPointerOut: (wall: WallId) => void;
   onFloorPointerDown: (event: ThreeEvent<PointerEvent>) => void;
   onSegmentPointerDown: (wall: WallId, segment: WallSegment, event: ThreeEvent<PointerEvent>) => void;
+  onConnectorPointerDown: (connector: WallConnectorRef, event: ThreeEvent<PointerEvent>) => void;
 }) {
   const gridCellColor = fadeSceneColor(SCENE_COLORS.gridCell, opacity);
   const gridSectionColor = fadeSceneColor(SCENE_COLORS.gridSection, opacity);
@@ -1904,6 +2647,7 @@ function BlockoutReferenceLayer({
           wall={wall}
           room={room}
           segments={wallSegments[wall]}
+          wallSegments={wallSegments}
           selected={selected}
           hovered={hovered}
           editable={editable}
@@ -1913,6 +2657,7 @@ function BlockoutReferenceLayer({
           onWallPointerOver={onWallPointerOver}
           onWallPointerOut={onWallPointerOut}
           onSegmentPointerDown={onSegmentPointerDown}
+          onConnectorPointerDown={onConnectorPointerDown}
         />
       ))}
     </group>
@@ -1923,6 +2668,7 @@ type SegmentedWallProps = {
   wall: WallId;
   room: RoomBounds;
   segments: WallSegment[];
+  wallSegments: WallSegmentation;
   selected: SelectedRef;
   hovered: SelectedRef;
   editable: boolean;
@@ -1932,12 +2678,14 @@ type SegmentedWallProps = {
   onWallPointerOver: (wall: WallId) => void;
   onWallPointerOut: (wall: WallId) => void;
   onSegmentPointerDown: (wall: WallId, segment: WallSegment, event: ThreeEvent<PointerEvent>) => void;
+  onConnectorPointerDown: (connector: WallConnectorRef, event: ThreeEvent<PointerEvent>) => void;
 };
 
 function SegmentedWall({
   wall,
   room,
   segments,
+  wallSegments,
   selected,
   hovered,
   editable,
@@ -1947,6 +2695,7 @@ function SegmentedWall({
   onWallPointerOver,
   onWallPointerOut,
   onSegmentPointerDown,
+  onConnectorPointerDown,
 }: SegmentedWallProps) {
   const wallSelected = editable && selected?.type === "wall" && selected.id === wall;
   const wallHovered = editable && hovered?.type === "wall" && hovered.id === wall;
@@ -1958,12 +2707,25 @@ function SegmentedWall({
   return (
     <group>
       {segments.map((segment) => {
-        const segmentLength = (segment.end - segment.start) * wallLength;
-        const alongOffset = ((segment.start + segment.end) / 2 - 0.5) * wallLength;
+        const endpoints = segmentWorldEndpoints(room, wallSegments, wall, segment);
+        const segmentLength = endpoints.length;
+        const rawStart = isHorizontal
+          ? room.minX + segment.start * wallLength
+          : room.minZ + segment.start * wallLength;
+        const rawEnd = isHorizontal
+          ? room.minX + segment.end * wallLength
+          : room.minZ + segment.end * wallLength;
+        const rawLength = Math.max(0, rawEnd - rawStart);
+        if (segmentLength < 0.02 && rawLength < 0.02) return null;
         const perp = sign * segment.displacement;
+        const visibleCenter = (endpoints.start + endpoints.end) / 2;
+        const hitCenter = (rawStart + rawEnd) / 2;
         const position: Vec3 = isHorizontal
-          ? [(room.minX + room.maxX) / 2 + alongOffset, room.height / 2, center[2] + perp]
-          : [center[0] + perp, room.height / 2, (room.minZ + room.maxZ) / 2 + alongOffset];
+          ? [visibleCenter, room.height / 2, center[2] + perp]
+          : [center[0] + perp, room.height / 2, visibleCenter];
+        const hitOffset: Vec3 = isHorizontal
+          ? [hitCenter - visibleCenter, 0, 0]
+          : [0, 0, hitCenter - visibleCenter];
         const segmentSelected =
           editable && selected?.type === "wall-segment" && selected.id === segment.id;
         const segmentHovered =
@@ -1974,6 +2736,8 @@ function SegmentedWall({
             key={segment.id}
             wall={wall}
             length={segmentLength}
+            hitLength={rawLength}
+            hitOffset={hitOffset}
             height={room.height}
             position={position}
             opacity={opacity}
@@ -2015,51 +2779,14 @@ function SegmentedWall({
             position={position}
             opacity={opacity}
             highlight={wallSelected || wallHovered}
+            onPointerDown={
+              editable
+                ? (event) => onConnectorPointerDown({ wall, segmentId: segment.id, side: "end" }, event)
+                : undefined
+            }
           />
         );
       })}
-      {(() => {
-        const first = segments[0];
-        if (!first || Math.abs(first.displacement) < 0.001) return null;
-        const startAlong = -wallLength / 2;
-        const midDisp = first.displacement / 2;
-        const perp = sign * midDisp;
-        const position: Vec3 = isHorizontal
-          ? [(room.minX + room.maxX) / 2 + startAlong, room.height / 2, center[2] + perp]
-          : [center[0] + perp, room.height / 2, (room.minZ + room.maxZ) / 2 + startAlong];
-        return (
-          <ConnectorMesh
-            key={`${wall}-start-connector`}
-            wall={wall}
-            depth={Math.abs(first.displacement)}
-            height={room.height}
-            position={position}
-            opacity={opacity}
-            highlight={wallSelected || wallHovered}
-          />
-        );
-      })()}
-      {(() => {
-        const last = segments[segments.length - 1];
-        if (!last || Math.abs(last.displacement) < 0.001) return null;
-        const endAlong = wallLength / 2;
-        const midDisp = last.displacement / 2;
-        const perp = sign * midDisp;
-        const position: Vec3 = isHorizontal
-          ? [(room.minX + room.maxX) / 2 + endAlong, room.height / 2, center[2] + perp]
-          : [center[0] + perp, room.height / 2, (room.minZ + room.maxZ) / 2 + endAlong];
-        return (
-          <ConnectorMesh
-            key={`${wall}-end-connector`}
-            wall={wall}
-            depth={Math.abs(last.displacement)}
-            height={room.height}
-            position={position}
-            opacity={opacity}
-            highlight={wallSelected || wallHovered}
-          />
-        );
-      })()}
     </group>
   );
 }
@@ -2069,14 +2796,90 @@ function wallSurfaceSign(wall: WallId): number {
   return 1;
 }
 
+function segmentWorldEndpoints(
+  room: RoomBounds,
+  segmentation: WallSegmentation,
+  wall: WallId,
+  segment: WallSegment,
+) {
+  const width = room.maxX - room.minX;
+  const depth = room.maxZ - room.minZ;
+
+  if (wall === "north") {
+    return {
+      start: segment.start <= 0.001 ? room.minX + westNorthDisplacement(segmentation) : room.minX + segment.start * width,
+      end: segment.end >= 0.999 ? room.maxX - eastNorthDisplacement(segmentation) : room.minX + segment.end * width,
+      length: Math.max(0, (segment.end >= 0.999 ? room.maxX - eastNorthDisplacement(segmentation) : room.minX + segment.end * width) - (segment.start <= 0.001 ? room.minX + westNorthDisplacement(segmentation) : room.minX + segment.start * width)),
+    };
+  }
+  if (wall === "south") {
+    return {
+      start: segment.start <= 0.001 ? room.minX + westSouthDisplacement(segmentation) : room.minX + segment.start * width,
+      end: segment.end >= 0.999 ? room.maxX - eastSouthDisplacement(segmentation) : room.minX + segment.end * width,
+      length: Math.max(0, (segment.end >= 0.999 ? room.maxX - eastSouthDisplacement(segmentation) : room.minX + segment.end * width) - (segment.start <= 0.001 ? room.minX + westSouthDisplacement(segmentation) : room.minX + segment.start * width)),
+    };
+  }
+  if (wall === "east") {
+    return {
+      start: segment.start <= 0.001 ? room.minZ + southEastDisplacement(segmentation) : room.minZ + segment.start * depth,
+      end: segment.end >= 0.999 ? room.maxZ - northEastDisplacement(segmentation) : room.minZ + segment.end * depth,
+      length: Math.max(0, (segment.end >= 0.999 ? room.maxZ - northEastDisplacement(segmentation) : room.minZ + segment.end * depth) - (segment.start <= 0.001 ? room.minZ + southEastDisplacement(segmentation) : room.minZ + segment.start * depth)),
+    };
+  }
+  return {
+    start: segment.start <= 0.001 ? room.minZ + southWestDisplacement(segmentation) : room.minZ + segment.start * depth,
+    end: segment.end >= 0.999 ? room.maxZ - northWestDisplacement(segmentation) : room.minZ + segment.end * depth,
+    length: Math.max(0, (segment.end >= 0.999 ? room.maxZ - northWestDisplacement(segmentation) : room.minZ + segment.end * depth) - (segment.start <= 0.001 ? room.minZ + southWestDisplacement(segmentation) : room.minZ + segment.start * depth)),
+  };
+}
+
+function northWestDisplacement(segmentation: WallSegmentation) {
+  return segmentation.north[0]?.displacement ?? 0;
+}
+
+function northEastDisplacement(segmentation: WallSegmentation) {
+  return segmentation.north[segmentation.north.length - 1]?.displacement ?? 0;
+}
+
+function southWestDisplacement(segmentation: WallSegmentation) {
+  return segmentation.south[0]?.displacement ?? 0;
+}
+
+function southEastDisplacement(segmentation: WallSegmentation) {
+  return segmentation.south[segmentation.south.length - 1]?.displacement ?? 0;
+}
+
+function westSouthDisplacement(segmentation: WallSegmentation) {
+  return segmentation.west[0]?.displacement ?? 0;
+}
+
+function westNorthDisplacement(segmentation: WallSegmentation) {
+  return segmentation.west[segmentation.west.length - 1]?.displacement ?? 0;
+}
+
+function eastSouthDisplacement(segmentation: WallSegmentation) {
+  return segmentation.east[0]?.displacement ?? 0;
+}
+
+function eastNorthDisplacement(segmentation: WallSegmentation) {
+  return segmentation.east[segmentation.east.length - 1]?.displacement ?? 0;
+}
+
 function RoomDimensionBadge({
   room,
+  wallSegments,
   onRoomChange,
 }: {
   room: RoomBounds;
+  wallSegments: WallSegmentation;
   onRoomChange: (room: RoomBounds) => void;
 }) {
-  const dimensions = roomDimensions(room);
+  const bounds = floorBounds(room, wallSegments);
+  const dimensions = {
+    width: bounds.maxX - bounds.minX,
+    depth: bounds.maxZ - bounds.minZ,
+    height: room.height,
+  };
 
   function commitWidth(value: string) {
     const nextWidth = Number(value);
@@ -2161,6 +2964,22 @@ function formatDimensionValue(value: number) {
   return value.toFixed(1);
 }
 
+function floorBounds(room: RoomBounds, wallSegments: WallSegmentation) {
+  let minX = room.minX;
+  let maxX = room.maxX;
+  let minZ = room.minZ;
+  let maxZ = room.maxZ;
+
+  for (const point of buildFloorPolygon(room, wallSegments)) {
+    minX = Math.min(minX, point.x);
+    maxX = Math.max(maxX, point.x);
+    minZ = Math.min(minZ, point.z);
+    maxZ = Math.max(maxZ, point.z);
+  }
+
+  return { minX, maxX, minZ, maxZ };
+}
+
 function fadeSceneColor(color: string, opacity: number) {
   return new THREE.Color(color).lerp(new THREE.Color(SCENE_COLORS.background), 1 - THREE.MathUtils.clamp(opacity, 0, 1));
 }
@@ -2187,9 +3006,19 @@ function shapeLocalPointerValue(
 }
 
 function shapePointerAngle(shape: CustomShape, clientX: number, clientY: number, projectPointerToFloor: Projector) {
+  return pointerAngleAroundPosition(shape.position, clientX, clientY, projectPointerToFloor);
+}
+
+/** Angle (radians) from `position` to the projected pointer on the floor plane. */
+function pointerAngleAroundPosition(
+  position: Vec3,
+  clientX: number,
+  clientY: number,
+  projectPointerToFloor: Projector,
+) {
   const point = projectPointerToFloor(clientX, clientY);
   if (!point) return null;
-  return Math.atan2(point[2] - shape.position[2], point[0] - shape.position[0]);
+  return Math.atan2(point[2] - position[2], point[0] - position[0]);
 }
 
 function shortestAngleDelta(nextAngle: number, startAngle: number) {
@@ -2293,7 +3122,8 @@ function MarbleSplatScene({
 
     const splat = new SplatMesh({ url, editable: true });
     splat.userData.captureHidden = true;
-    splat.quaternion.set(1, 0, 0, 0);
+    // Final orientation comes from applySplatAlignment (which honors flipX),
+    // so no preliminary quaternion seeding here.
     applySplatAlignment(splat, alignmentRef.current);
     applySplatOpacity(splat, opacityRef.current);
     applySplatObjectEdits(splat, regionsRef.current, selectedRef.current, objectSplatModeRef.current);
@@ -2329,8 +3159,9 @@ function MarbleSplatScene({
 
 function applySplatAlignment(mesh: SplatMesh, alignment: SplatAlignment) {
   const rotationY = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), alignment.rotationY);
+  const base = (alignment.flipX ?? true) ? SPARK_SPLAT_BASE_QUATERNION : SPLAT_IDENTITY_QUATERNION;
   mesh.position.set(...alignment.position);
-  mesh.quaternion.copy(SPARK_SPLAT_BASE_QUATERNION).premultiply(rotationY);
+  mesh.quaternion.copy(base).premultiply(rotationY);
   mesh.scale.setScalar(alignment.scale);
   mesh.updateMatrixWorld();
 }
@@ -2432,18 +3263,19 @@ function ViewportCamera() {
   return <PerspectiveCamera ref={cameraRef} makeDefault fov={44} />;
 }
 
-function FirstPersonController({
-  active,
-  room,
-  pointerLockControls,
-  onActiveChange,
-}: {
-  active: boolean;
-  room: RoomBounds;
-  pointerLockControls: RefObject<PointerLockControlsImpl | null>;
-  onActiveChange: (active: boolean) => void;
-}) {
-  const { camera } = useThree();
+/**
+ * First-person camera controller used inside the splat view.
+ *
+ * - Spawn pose: standing at the world origin (eye height ~1.6m), looking down
+ *   the camera's natural forward axis (-Z).
+ * - Look: drag with the left mouse button anywhere on the canvas to rotate
+ *   yaw + pitch (no pointer lock — the cursor stays visible).
+ * - Move: WASD; hold shift to sprint.
+ * - Bounds: position is clamped to a ±SPLAT_WALK_HALF_EXTENT box around the
+ *   origin so you can roam the room but not drift into the void.
+ */
+function FirstPersonController({ active }: { active: boolean }) {
+  const { camera, gl } = useThree();
   const cameraRef = useRef(camera);
   const keysRef = useRef<WalkKeys>({
     forward: false,
@@ -2452,51 +3284,109 @@ function FirstPersonController({
     right: false,
     fast: false,
   });
-  const roomRef = useRef(room);
+  const yawRef = useRef(0);
+  const pitchRef = useRef(0);
+  const draggingRef = useRef(false);
+  const dragPointerIdRef = useRef<number | null>(null);
+  const lastPointerRef = useRef({ x: 0, y: 0 });
   const forwardRef = useRef(new THREE.Vector3());
   const rightRef = useRef(new THREE.Vector3());
   const moveRef = useRef(new THREE.Vector3());
+  const eulerRef = useRef(new THREE.Euler(0, 0, 0, "YXZ"));
 
   useEffect(() => {
     cameraRef.current = camera;
   }, [camera]);
 
-  useEffect(() => {
-    roomRef.current = room;
-  }, [room]);
-
+  // Spawn at origin and reset look angles whenever we (re-)enter splat mode.
   useEffect(() => {
     const keys = keysRef.current;
 
     if (!active) {
       resetWalkKeys(keys);
-      if (pointerLockControls.current?.isLocked) pointerLockControls.current.unlock();
+      draggingRef.current = false;
       return;
     }
 
-    const activeCamera = cameraRef.current;
-    const eyeHeight = firstPersonEyeHeight(roomRef.current);
-    const centerX = (roomRef.current.minX + roomRef.current.maxX) / 2;
-    const centerZ = (roomRef.current.minZ + roomRef.current.maxZ) / 2;
-    const spawnZ = THREE.MathUtils.clamp(
-      roomRef.current.minZ + 0.9,
-      roomRef.current.minZ + WALK_WALL_MARGIN,
-      roomRef.current.maxZ - WALK_WALL_MARGIN,
-    );
-    activeCamera.position.set(centerX, eyeHeight, spawnZ);
-    activeCamera.lookAt(centerX, eyeHeight, centerZ);
-    activeCamera.updateProjectionMatrix();
+    yawRef.current = 0;
+    pitchRef.current = 0;
+    const cam = cameraRef.current;
+    cam.position.set(0, WALK_EYE_HEIGHT, 0);
+    applyLook(cam, yawRef.current, pitchRef.current, eulerRef.current);
+    cam.updateProjectionMatrix();
 
     return () => {
       resetWalkKeys(keys);
     };
-  }, [active, pointerLockControls]);
+  }, [active]);
 
+  // Drag-to-look on the canvas (no pointer lock — cursor stays visible).
+  useEffect(() => {
+    if (!active) return;
+    const element = gl.domElement;
+
+    function handlePointerDown(event: PointerEvent) {
+      if (event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey) return;
+      draggingRef.current = true;
+      dragPointerIdRef.current = event.pointerId;
+      lastPointerRef.current = { x: event.clientX, y: event.clientY };
+      try {
+        element.setPointerCapture(event.pointerId);
+      } catch {
+        // pointer capture occasionally throws on transient capture conflicts;
+        // dragging still works without it.
+      }
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      if (!draggingRef.current || event.pointerId !== dragPointerIdRef.current) return;
+      const dx = event.clientX - lastPointerRef.current.x;
+      const dy = event.clientY - lastPointerRef.current.y;
+      lastPointerRef.current = { x: event.clientX, y: event.clientY };
+      yawRef.current -= dx * SPLAT_LOOK_SENSITIVITY;
+      pitchRef.current = THREE.MathUtils.clamp(
+        pitchRef.current - dy * SPLAT_LOOK_SENSITIVITY,
+        -SPLAT_PITCH_LIMIT,
+        SPLAT_PITCH_LIMIT,
+      );
+      applyLook(cameraRef.current, yawRef.current, pitchRef.current, eulerRef.current);
+    }
+
+    function endDrag(event: PointerEvent) {
+      if (event.pointerId !== dragPointerIdRef.current) return;
+      draggingRef.current = false;
+      dragPointerIdRef.current = null;
+      try {
+        element.releasePointerCapture(event.pointerId);
+      } catch {
+        // safe to ignore — capture may already be released
+      }
+    }
+
+    element.addEventListener("pointerdown", handlePointerDown);
+    element.addEventListener("pointermove", handlePointerMove);
+    element.addEventListener("pointerup", endDrag);
+    element.addEventListener("pointercancel", endDrag);
+
+    return () => {
+      element.removeEventListener("pointerdown", handlePointerDown);
+      element.removeEventListener("pointermove", handlePointerMove);
+      element.removeEventListener("pointerup", endDrag);
+      element.removeEventListener("pointercancel", endDrag);
+    };
+  }, [active, gl.domElement]);
+
+  // WASD (works without pointer lock).
   useEffect(() => {
     if (!active) return;
     const keys = keysRef.current;
 
     function applyKey(event: KeyboardEvent, pressed: boolean) {
+      // Don't hijack typing inside text inputs (style prompt, etc.).
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+        return;
+      }
       const handled =
         event.code === "KeyW" ||
         event.code === "KeyA" ||
@@ -2525,7 +3415,6 @@ function FirstPersonController({
 
     function handleBlur() {
       resetWalkKeys(keys);
-      onActiveChange(false);
     }
 
     window.addEventListener("keydown", handleKeyDown);
@@ -2537,13 +3426,11 @@ function FirstPersonController({
       window.removeEventListener("keyup", handleKeyUp);
       window.removeEventListener("blur", handleBlur);
     };
-  }, [active, onActiveChange]);
+  }, [active]);
 
   useFrame((_, delta) => {
-    const activeCamera = cameraRef.current;
-    const controls = pointerLockControls.current;
-    if (!active || !controls?.isLocked) return;
-
+    if (!active) return;
+    const cam = cameraRef.current;
     const keys = keysRef.current;
     const forwardAmount = Number(keys.forward) - Number(keys.backward);
     const rightAmount = Number(keys.right) - Number(keys.left);
@@ -2552,10 +3439,11 @@ function FirstPersonController({
     const forward = forwardRef.current;
     const right = rightRef.current;
     const move = moveRef.current;
-    activeCamera.getWorldDirection(forward);
+    cam.getWorldDirection(forward);
     forward.y = 0;
+    if (forward.lengthSq() < 1e-6) return;
     forward.normalize();
-    right.setFromMatrixColumn(activeCamera.matrix, 0);
+    right.setFromMatrixColumn(cam.matrix, 0);
     right.y = 0;
     right.normalize();
     move.set(0, 0, 0).addScaledVector(forward, forwardAmount).addScaledVector(right, rightAmount);
@@ -2563,23 +3451,80 @@ function FirstPersonController({
 
     const distance = delta * WALK_SPEED * (keys.fast ? WALK_FAST_MULTIPLIER : 1);
     move.normalize().multiplyScalar(distance);
-    activeCamera.position.add(move);
-    activeCamera.position.set(
-      THREE.MathUtils.clamp(
-        activeCamera.position.x,
-        roomRef.current.minX + WALK_WALL_MARGIN,
-        roomRef.current.maxX - WALK_WALL_MARGIN,
-      ),
-      firstPersonEyeHeight(roomRef.current),
-      THREE.MathUtils.clamp(
-        activeCamera.position.z,
-        roomRef.current.minZ + WALK_WALL_MARGIN,
-        roomRef.current.maxZ - WALK_WALL_MARGIN,
-      ),
-    );
+    cam.position.add(move);
+    cam.position.x = THREE.MathUtils.clamp(cam.position.x, -SPLAT_WALK_HALF_EXTENT, SPLAT_WALK_HALF_EXTENT);
+    cam.position.z = THREE.MathUtils.clamp(cam.position.z, -SPLAT_WALK_HALF_EXTENT, SPLAT_WALK_HALF_EXTENT);
+    cam.position.y = WALK_EYE_HEIGHT;
   });
 
   return null;
+}
+
+function applyLook(camera: THREE.Camera, yaw: number, pitch: number, scratch: THREE.Euler) {
+  scratch.set(pitch, yaw, 0, "YXZ");
+  camera.quaternion.setFromEuler(scratch);
+}
+
+/**
+ * VR locomotion rig used while a WebXR session is presenting the splat
+ * walkthrough (Quest Link / SteamVR / Air Link / native Quest browser).
+ *
+ * Why this exists:
+ *  - In a WebXR session, three.js's renderer.xr drives the camera from the
+ *    headset's pose. Mutating camera.position directly (the way the
+ *    keyboard/mouse FirstPersonController does) does NOT translate the user
+ *    — the headset pose is added on top of the camera transform every
+ *    frame, so any translation you write gets visually overwritten.
+ *  - The correct pattern is an "XR rig": a parent <XROrigin> group whose
+ *    position represents the user's *feet* in world space. The headset
+ *    pose is offset from that origin. Translating the rig translates the
+ *    user.
+ *
+ * What it does:
+ *  - Renders an <XROrigin> at world (0, 0, 0) on first activation, putting
+ *    the user at the splat center. (The local bedroom splat sits at the
+ *    world origin too.)
+ *  - Wires `useXRControllerLocomotion` to the rig: left thumbstick = walk
+ *    relative to head facing, right thumbstick = snap-turn in 30° ticks
+ *    (snap-turn is much more comfortable than smooth-turn for most people
+ *    in VR, especially over Quest Link's slight latency).
+ *  - Clamps the rig to ±SPLAT_WALK_HALF_EXTENT so the user can't drift out
+ *    of the splat. The clamp runs after the locomotion hook in useFrame,
+ *    so it overrides any movement that would push past the boundary.
+ *
+ * The component is a no-op when `active` is false, so it's safe to mount
+ * unconditionally — but we only mount it in splat mode while in VR to
+ * avoid attaching controller listeners we don't need.
+ */
+function VrSplatRig({ active }: { active: boolean }) {
+  const originRef = useRef<THREE.Group>(null);
+
+  useEffect(() => {
+    if (!active) return;
+    const origin = originRef.current;
+    if (!origin) return;
+    origin.position.set(0, 0, 0);
+    origin.rotation.set(0, 0, 0);
+  }, [active]);
+
+  useXRControllerLocomotion(
+    originRef,
+    { speed: WALK_SPEED },
+    { type: "snap", degrees: 30 },
+    "left",
+  );
+
+  useFrame(() => {
+    if (!active) return;
+    const origin = originRef.current;
+    if (!origin) return;
+    origin.position.x = THREE.MathUtils.clamp(origin.position.x, -SPLAT_WALK_HALF_EXTENT, SPLAT_WALK_HALF_EXTENT);
+    origin.position.z = THREE.MathUtils.clamp(origin.position.z, -SPLAT_WALK_HALF_EXTENT, SPLAT_WALK_HALF_EXTENT);
+    origin.position.y = 0;
+  });
+
+  if (!active) return null;
+  return <XROrigin ref={originRef} />;
 }
 
 function resetWalkKeys(keys: WalkKeys) {
@@ -2588,10 +3533,6 @@ function resetWalkKeys(keys: WalkKeys) {
   keys.left = false;
   keys.right = false;
   keys.fast = false;
-}
-
-function firstPersonEyeHeight(room: RoomBounds) {
-  return THREE.MathUtils.clamp(WALK_EYE_HEIGHT, 0.6, Math.max(0.6, room.height - 0.25));
 }
 
 function clampCameraPosition(position: Vec3, room: RoomBounds): Vec3 {
@@ -2633,6 +3574,44 @@ function screenPerpAxisForWall(
   return { x, y, lengthSq: x * x + y * y };
 }
 
+function screenAxisForConnectorBoundary(
+  wall: WallId,
+  reference: Vec3,
+  camera: THREE.Camera,
+  element: HTMLCanvasElement,
+) {
+  const axisEnd: Vec3 =
+    wall === "north" || wall === "south"
+      ? [reference[0] + 1, reference[1], reference[2]]
+      : [reference[0], reference[1], reference[2] + 1];
+  const start = worldToClientPoint(reference, camera, element);
+  const end = worldToClientPoint(axisEnd, camera, element);
+  const x = end.x - start.x;
+  const y = end.y - start.y;
+  return { x, y, lengthSq: x * x + y * y };
+}
+
+function screenAxisForLocalAxis(
+  position: Vec3,
+  rotation: Vec3,
+  axis: ShapeResizeAxis,
+  camera: THREE.Camera,
+  element: HTMLCanvasElement,
+) {
+  const axisVector = new THREE.Vector3(axis === 0 ? 1 : 0, axis === 1 ? 1 : 0, axis === 2 ? 1 : 0);
+  axisVector.applyEuler(new THREE.Euler(...rotation));
+  const axisEnd: Vec3 = [
+    position[0] + axisVector.x,
+    position[1] + axisVector.y,
+    position[2] + axisVector.z,
+  ];
+  const start = worldToClientPoint(position, camera, element);
+  const end = worldToClientPoint(axisEnd, camera, element);
+  const x = end.x - start.x;
+  const y = end.y - start.y;
+  return { x, y, lengthSq: x * x + y * y };
+}
+
 function worldToClientPoint(position: Vec3, camera: THREE.Camera, element: HTMLCanvasElement) {
   const rect = element.getBoundingClientRect();
   const projected = new THREE.Vector3(...position).project(camera);
@@ -2643,6 +3622,11 @@ function worldToClientPoint(position: Vec3, camera: THREE.Camera, element: HTMLC
 }
 
 function splatAlignmentFromMarble(marble: MarbleResult): SplatAlignment {
+  // Pre-baked local splats have authored defaults — they don't follow Marble's
+  // Y-down + 1m-unit convention.
+  const localOverride = marble.spzUrl ? LOCAL_SPLAT_DEFAULTS[marble.spzUrl] : undefined;
+  if (localOverride) return localOverride;
+
   const position = marble.payload?.metadata.capture?.camera?.position;
   if (!position) return DEFAULT_SPLAT_ALIGNMENT;
   return {
@@ -2651,9 +3635,14 @@ function splatAlignmentFromMarble(marble: MarbleResult): SplatAlignment {
   };
 }
 
-function captureLayoutPano(scene: THREE.Scene, renderer: THREE.WebGLRenderer, room: RoomBounds): CaptureImage | undefined {
+function captureLayoutPano(
+  scene: THREE.Scene,
+  renderer: THREE.WebGLRenderer,
+  room: RoomBounds,
+  wallSegments: WallSegmentation,
+): CaptureImage | undefined {
   try {
-    const position = layoutPanoCameraPosition(room);
+    const position = layoutPanoCameraPosition(room, wallSegments);
     const primary = renderLayoutPano(scene, renderer, position, LAYOUT_PANO_WIDTH);
     const capture =
       dataUrlByteLength(primary.dataUrl) <= LAYOUT_PANO_MAX_DATA_URL_BYTES
@@ -2716,6 +3705,24 @@ function renderLayoutPano(
 function prepareSceneForLayoutCapture(scene: THREE.Scene) {
   const restores: Array<() => void> = [];
 
+  // Swap the scene background to a bright neutral so the panorama's "above
+  // the walls" region reads as a flat ceiling/sky to Marble instead of empty
+  // dark space.
+  const previousBackground = scene.background;
+  scene.background = new THREE.Color(LAYOUT_CAPTURE.background);
+  restores.push(() => {
+    scene.background = previousBackground;
+  });
+
+  // Inject a strong ambient light so flat blockout faces are uniformly lit
+  // (no harsh shadows that confuse Marble's spatial interpretation).
+  const captureLight = new THREE.AmbientLight("#ffffff", LAYOUT_CAPTURE.ambientIntensity);
+  captureLight.userData.layoutCaptureLight = true;
+  scene.add(captureLight);
+  restores.push(() => {
+    scene.remove(captureLight);
+  });
+
   scene.traverse((object) => {
     const shouldHide =
       object.userData.captureHidden === true ||
@@ -2731,6 +3738,7 @@ function prepareSceneForLayoutCapture(scene: THREE.Scene) {
     }
 
     if (!(object instanceof THREE.Mesh)) return;
+    const captureRole = object.userData.captureRole as string | undefined;
     const materials = Array.isArray(object.material) ? object.material : [object.material];
     materials.forEach((material) => {
       if (!material) return;
@@ -2750,11 +3758,35 @@ function prepareSceneForLayoutCapture(scene: THREE.Scene) {
       material.transparent = false;
       material.opacity = 1;
       material.depthWrite = true;
+
+      // For tagged architectural meshes, swap the color (and emissive) to a
+      // bright capture-time palette so floor/walls/openings are readable to
+      // Marble. We restore the originals after capture so the editor view is
+      // untouched.
+      const overrideColor = captureColorForRole(captureRole);
+      let restoreColor: (() => void) | undefined;
+      if (overrideColor) {
+        const colored = material as THREE.Material & { color?: THREE.Color; emissive?: THREE.Color; emissiveIntensity?: number };
+        const previousColor = colored.color?.clone();
+        const previousEmissive = colored.emissive?.clone();
+        const previousEmissiveIntensity = colored.emissiveIntensity;
+        if (colored.color) colored.color.set(overrideColor);
+        if (colored.emissive) {
+          colored.emissive.set("#000000");
+          if (typeof colored.emissiveIntensity === "number") colored.emissiveIntensity = 0;
+        }
+        restoreColor = () => {
+          if (previousColor && colored.color) colored.color.copy(previousColor);
+          if (previousEmissive && colored.emissive) colored.emissive.copy(previousEmissive);
+          if (typeof previousEmissiveIntensity === "number") colored.emissiveIntensity = previousEmissiveIntensity;
+        };
+      }
       material.needsUpdate = true;
       restores.push(() => {
         material.transparent = previousTransparent;
         material.opacity = previousOpacity;
         material.depthWrite = previousDepthWrite;
+        restoreColor?.();
         material.needsUpdate = true;
       });
     });
@@ -2763,6 +3795,25 @@ function prepareSceneForLayoutCapture(scene: THREE.Scene) {
   return () => {
     for (let index = restores.length - 1; index >= 0; index -= 1) restores[index]();
   };
+}
+
+function captureColorForRole(role: string | undefined): string | undefined {
+  switch (role) {
+    case "floor":
+      return LAYOUT_CAPTURE.floor;
+    case "wall":
+      return LAYOUT_CAPTURE.wall;
+    case "door-panel":
+      return LAYOUT_CAPTURE.doorPanel;
+    case "door-frame":
+      return LAYOUT_CAPTURE.doorFrame;
+    case "window-glass":
+      return LAYOUT_CAPTURE.windowGlass;
+    case "window-frame":
+      return LAYOUT_CAPTURE.windowFrame;
+    default:
+      return undefined;
+  }
 }
 
 function readCubeFaces(renderer: THREE.WebGLRenderer, target: THREE.WebGLCubeRenderTarget, size: number) {
@@ -2850,12 +3901,41 @@ function sampleCubeFace(faces: Uint8Array[], size: number, direction: THREE.Vect
   return [pixels[index], pixels[index + 1], pixels[index + 2]];
 }
 
-function layoutPanoCameraPosition(room: RoomBounds): Vec3 {
-  return [
-    (room.minX + room.maxX) / 2,
-    THREE.MathUtils.clamp(room.height * 0.55, 1.2, 1.7),
-    (room.minZ + room.maxZ) / 2,
-  ];
+/**
+ * Position the panorama capture camera at the centroid of the *actual* floor
+ * polygon (which accounts for outcrops/cuts) at human eye height. For a plain
+ * rectangular room this is identical to the geometric center; for L-shapes or
+ * outcrop layouts the centroid stays inside the room.
+ */
+function layoutPanoCameraPosition(room: RoomBounds, wallSegments: WallSegmentation): Vec3 {
+  const polygon = buildFloorPolygon(room, wallSegments);
+  const eyeY = THREE.MathUtils.clamp(WALK_EYE_HEIGHT, 1.2, Math.max(1.2, room.height - 0.4));
+  if (polygon.length < 3) {
+    return [(room.minX + room.maxX) / 2, eyeY, (room.minZ + room.maxZ) / 2];
+  }
+  const { x, z } = polygonCentroid(polygon);
+  return [x, eyeY, z];
+}
+
+function polygonCentroid(points: Array<{ x: number; z: number }>): { x: number; z: number } {
+  let area = 0;
+  let cx = 0;
+  let cz = 0;
+  for (let i = 0; i < points.length; i += 1) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    const cross = a.x * b.z - b.x * a.z;
+    area += cross;
+    cx += (a.x + b.x) * cross;
+    cz += (a.z + b.z) * cross;
+  }
+  area *= 0.5;
+  if (Math.abs(area) < 1e-6) {
+    const sumX = points.reduce((s, p) => s + p.x, 0);
+    const sumZ = points.reduce((s, p) => s + p.z, 0);
+    return { x: sumX / points.length, z: sumZ / points.length };
+  }
+  return { x: cx / (6 * area), z: cz / (6 * area) };
 }
 
 function dataUrlByteLength(dataUrl: string) {
@@ -3096,6 +4176,15 @@ function SplatAlignmentControls({
           onChange={(value) => onAlignmentChange({ ...alignment, rotationY: THREE.MathUtils.degToRad(value) })}
         />
         <NumberControl label="Scale" value={alignment.scale} step={0.05} min={0.01} onChange={updateScale} />
+        <label className="col-span-2 flex items-center justify-between gap-2 rounded-sm border border-[var(--color-border)] bg-[var(--color-inset)] px-1.5 py-1 text-[10px] font-medium uppercase text-[var(--color-text-muted)]">
+          <span>Flip X (Y-up fix)</span>
+          <input
+            type="checkbox"
+            className="h-3.5 w-3.5"
+            checked={alignment.flipX ?? true}
+            onChange={(event) => onAlignmentChange({ ...alignment, flipX: event.target.checked })}
+          />
+        </label>
       </div>
     </DraggableViewportPanel>
   );
@@ -3136,6 +4225,154 @@ function formatControlNumber(value: number) {
   return Number.isInteger(value) ? String(value) : value.toFixed(2);
 }
 
+/**
+ * Subscribes the React tree to the module-level xrStore so DOM elements
+ * rendered *outside* the <Canvas> (i.e. outside the <XR> provider, where
+ * useXR() doesn't work) can still react to XR session state — for example,
+ * to swap their hint copy or hide entirely while the user is in VR.
+ */
+function useXrPresentingExternal() {
+  return useSyncExternalStore(
+    (callback) => xrStore.subscribe(callback),
+    () => xrStore.getState().session != null,
+    () => false,
+  );
+}
+
+/**
+ * Container for the bottom WASD hint and the Enter VR button. The WASD/drag
+ * hint is meaningless once the user is in a headset (their hands aren't on
+ * the keyboard) so we hide it during a VR session and show a controller
+ * hint instead.
+ */
+function SplatOverlayControls() {
+  const xrPresenting = useXrPresentingExternal();
+  return xrPresenting ? (
+    <SplatVrHint />
+  ) : (
+    <>
+      <EnterVrButton />
+      <SplatWalkHint />
+    </>
+  );
+}
+
+function SplatVrHint() {
+  return (
+    <div className="pointer-events-none absolute inset-x-0 bottom-3 mx-auto w-fit max-w-[90%] rounded-md border border-[var(--border-mid)] bg-[color-mix(in_srgb,#16181d_88%,transparent)] px-3 py-1.5 text-[11px] text-[var(--text-secondary)] shadow-[0_8px_24px_rgba(0,0,0,0.35)] [backdrop-filter:blur(6px)]">
+      <span className="font-mono text-[var(--text-bright)]">L stick</span>
+      <span className="ml-1">walk</span>
+      <span className="mx-2 opacity-60">·</span>
+      <span className="font-mono text-[var(--text-bright)]">R stick</span>
+      <span className="ml-1">snap-turn</span>
+    </div>
+  );
+}
+
+function SplatWalkHint() {
+  return (
+    <div className="pointer-events-none absolute inset-x-0 bottom-3 mx-auto w-fit max-w-[90%] rounded-md border border-[var(--border-mid)] bg-[color-mix(in_srgb,#16181d_88%,transparent)] px-3 py-1.5 text-[11px] text-[var(--text-secondary)] shadow-[0_8px_24px_rgba(0,0,0,0.35)] [backdrop-filter:blur(6px)]">
+      <span className="font-mono text-[var(--text-bright)]">WASD</span>
+      <span className="mx-2 opacity-60">·</span>
+      <span>drag to look</span>
+      <span className="mx-2 opacity-60">·</span>
+      <span className="font-mono text-[var(--text-bright)]">Shift</span>
+      <span className="ml-1">to sprint</span>
+    </div>
+  );
+}
+
+/**
+ * Floating button that launches an immersive-vr WebXR session. Probes
+ * `navigator.xr.isSessionSupported('immersive-vr')` once on mount and only
+ * renders if the browser+device combo can actually present VR (so it stays
+ * hidden on a desktop Chrome without an HMD, but appears on the Quest 3
+ * browser). Clicking it calls `xrStore.enterVR()`, which negotiates the
+ * session and hands the renderer's camera over to the headset.
+ */
+function EnterVrButton() {
+  // Lazy initializer covers the SSR / no-WebXR cases up front so the effect
+  // below only runs the async support probe — keeps us on the right side of
+  // the React 19 "no setState in effects" lint rule.
+  const [supported, setSupported] = useState<boolean | null>(() => {
+    if (typeof navigator === "undefined") return false;
+    const xr = (navigator as Navigator & { xr?: XRSystem }).xr;
+    if (!xr || typeof xr.isSessionSupported !== "function") return false;
+    return null;
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (supported !== null) return;
+    let cancelled = false;
+    const xr = (navigator as Navigator & { xr?: XRSystem }).xr;
+    if (!xr) return;
+    xr.isSessionSupported("immersive-vr")
+      .then((value) => {
+        if (!cancelled) setSupported(Boolean(value));
+      })
+      .catch(() => {
+        if (!cancelled) setSupported(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [supported]);
+
+  const handleEnter = useCallback(async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      const result = await xrStore.enterVR();
+      if (!result) {
+        setError("Headset declined the session.");
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to enter VR.");
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  // While `supported` is null we're still probing isSessionSupported(); show
+  // nothing so the button doesn't pop in/out. If the probe finished and
+  // there's no XR device, show a small hint instead of the button so first-
+  // time users know how to get a headset connected (Quest Link / SteamVR).
+  if (supported === null) return null;
+  if (!supported) {
+    return (
+      <div className="pointer-events-none absolute right-3 top-3 flex max-w-[220px] flex-col items-end gap-1 text-right">
+        <div className="pointer-events-none rounded-md border border-[var(--border-dim)] bg-[color-mix(in_srgb,#16181d_88%,transparent)] px-2.5 py-1 text-[10px] uppercase tracking-[0.16em] text-[var(--text-secondary)] shadow-[0_4px_12px_rgba(0,0,0,0.35)] [backdrop-filter:blur(6px)]">
+          VR ready · connect Quest Link
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="pointer-events-none absolute right-3 top-3 flex flex-col items-end gap-1">
+      <button
+        type="button"
+        onClick={handleEnter}
+        disabled={busy}
+        className="pointer-events-auto rounded-md border border-[var(--border-mid)] bg-[color-mix(in_srgb,#16181d_92%,transparent)] px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.18em] text-[var(--text-bright)] shadow-[0_8px_24px_rgba(0,0,0,0.35)] [backdrop-filter:blur(6px)] transition-colors hover:bg-[color-mix(in_srgb,var(--accent-dim,#3a4250)_60%,#16181d)] disabled:cursor-not-allowed disabled:opacity-60"
+        title="Send the splat to your connected headset (Meta Quest Link, SteamVR, or native browser)"
+      >
+        {busy ? "Entering…" : "Enter VR"}
+      </button>
+      <div className="pointer-events-none text-[10px] uppercase tracking-[0.16em] text-[var(--text-secondary)] opacity-80">
+        Quest Link · SteamVR
+      </div>
+      {error ? (
+        <div className="pointer-events-none rounded-sm bg-[color-mix(in_srgb,#16181d_92%,transparent)] px-2 py-1 text-[10px] text-[var(--color-warning,#f5a25d)] shadow-[0_4px_12px_rgba(0,0,0,0.35)]">
+          {error}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function SplatViewportOverlay({ marble, loadState }: { marble: MarbleResult; loadState: SplatLoadState }) {
   if (loadState.status === "error") {
     return (
@@ -3163,7 +4400,7 @@ function SplatViewportOverlay({ marble, loadState }: { marble: MarbleResult; loa
   return (
     <div className="pointer-events-none absolute inset-x-4 bottom-4 mx-auto max-w-sm rounded-md border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-overlay)_88%,transparent)] p-3 text-center text-sm text-[var(--color-text-primary)] shadow-[var(--shadow-float)] [backdrop-filter:var(--panel-blur)]">
       <div className="font-semibold">Loading generated room</div>
-      <p className="mt-1 text-pretty text-xs text-[var(--color-text-muted)]">Streaming the Marble SPZ asset into the viewport.</p>
+      <p className="mt-1 text-pretty text-xs text-[var(--color-text-muted)]">Streaming the generated splat asset into the viewport.</p>
     </div>
   );
 }
@@ -3211,6 +4448,7 @@ function RoomFloor({
       rotation={[-Math.PI / 2, 0, 0]}
       onPointerDown={onPointerDown}
       geometry={geometry}
+      userData={{ captureRole: "floor" }}
     >
       <meshStandardMaterial
         color={SCENE_COLORS.floor}
@@ -3227,6 +4465,7 @@ function RoomFloor({
 
 const MAX_OUTWARD_DISPLACEMENT = 6;
 const MAX_INWARD_DISPLACEMENT_FACTOR = 0.7;
+const MIN_CONNECTOR_OPENING_LENGTH = 0.45;
 
 function clampDisplacement(value: number, room: RoomBounds, wall: WallId): number {
   const inwardLimit =
@@ -3234,6 +4473,215 @@ function clampDisplacement(value: number, room: RoomBounds, wall: WallId): numbe
       ? (room.maxX - room.minX) * MAX_INWARD_DISPLACEMENT_FACTOR
       : (room.maxZ - room.minZ) * MAX_INWARD_DISPLACEMENT_FACTOR;
   return Math.min(inwardLimit, Math.max(-MAX_OUTWARD_DISPLACEMENT, value));
+}
+
+type WallConnectorDescriptor = {
+  ref: WallConnectorRef;
+  wall: WallId;
+  segment: WallSegment;
+  length: number;
+  position: Vec3;
+  rotationY: number;
+  axis: "x" | "z";
+  midCoord: number;
+  directionSign: number;
+  fraction: number;
+  hasNeighbor: boolean;
+};
+
+function connectorDescriptor(
+  room: RoomBounds,
+  segmentation: WallSegmentation,
+  ref: WallConnectorRef,
+): WallConnectorDescriptor | null {
+  const segments = segmentation[ref.wall];
+  const index = segments.findIndex((segment) => segment.id === ref.segmentId);
+  if (index === -1) return null;
+
+  const segment = segments[index];
+  const neighbor = ref.side === "start" ? segments[index - 1] : segments[index + 1];
+  if (!neighbor && segment.displacement >= -0.001) return null;
+  const fromDisplacement = ref.side === "start"
+    ? neighbor?.displacement ?? 0
+    : segment.displacement;
+  const toDisplacement = ref.side === "start"
+    ? segment.displacement
+    : neighbor?.displacement ?? 0;
+  const delta = toDisplacement - fromDisplacement;
+  if (Math.abs(delta) < 0.001) return null;
+
+  const wall = ref.wall;
+  const sign = wallSurfaceSign(wall);
+  const center = wallPosition(room, wall);
+  const fraction = ref.side === "start" ? segment.start : segment.end;
+  const width = room.maxX - room.minX;
+  const depth = room.maxZ - room.minZ;
+
+  if (wall === "north" || wall === "south") {
+    const x = room.minX + fraction * width;
+    const z1 = center[2] + sign * fromDisplacement;
+    const z2 = center[2] + sign * toDisplacement;
+    const mid = (z1 + z2) / 2;
+    return {
+      ref,
+      wall,
+      segment,
+      length: Math.abs(z2 - z1),
+      position: [x, room.height / 2, mid],
+      rotationY: Math.PI / 2,
+      axis: "z",
+      midCoord: mid,
+      directionSign: Math.sign(z2 - z1) || 1,
+      fraction,
+      hasNeighbor: Boolean(neighbor),
+    };
+  }
+
+  const z = room.minZ + fraction * depth;
+  const x1 = center[0] + sign * fromDisplacement;
+  const x2 = center[0] + sign * toDisplacement;
+  const mid = (x1 + x2) / 2;
+  return {
+    ref,
+    wall,
+    segment,
+    length: Math.abs(x2 - x1),
+    position: [mid, room.height / 2, z],
+    rotationY: 0,
+    axis: "x",
+    midCoord: mid,
+    directionSign: Math.sign(x2 - x1) || 1,
+    fraction,
+    hasNeighbor: Boolean(neighbor),
+  };
+}
+
+function clampConnectorOffset(descriptor: WallConnectorDescriptor, offset: number, width: number) {
+  const half = width / 2;
+  return Math.min(descriptor.length / 2 - half, Math.max(-descriptor.length / 2 + half, offset));
+}
+
+function clampSegmentOffset(room: RoomBounds, wall: WallId, segment: WallSegment, offset: number, width: number) {
+  const length = wallAxisLength(room, wall);
+  const min = (segment.start - 0.5) * length + width / 2;
+  const max = (segment.end - 0.5) * length - width / 2;
+  if (max < min) return (min + max) / 2;
+  return Math.min(max, Math.max(min, offset));
+}
+
+function clampOpeningOffsetOnWallRun(
+  room: RoomBounds,
+  segmentation: WallSegmentation,
+  wall: WallId,
+  currentOffset: number,
+  nextOffset: number,
+  width: number,
+) {
+  const bounds = openingWallRunBounds(room, segmentation, wall, currentOffset);
+  if (!bounds) return clampWallOffset(room, wall, nextOffset, width);
+  const min = bounds.minOffset + width / 2;
+  const max = bounds.maxOffset - width / 2;
+  if (max < min) return (min + max) / 2;
+  return Math.min(max, Math.max(min, nextOffset));
+}
+
+function clampOpeningWidthOnWallRun(
+  room: RoomBounds,
+  segmentation: WallSegmentation,
+  wall: WallId,
+  currentOffset: number,
+  width: number,
+) {
+  const bounds = openingWallRunBounds(room, segmentation, wall, currentOffset);
+  if (!bounds) return clampOpeningWidth(room, wall, currentOffset, width);
+  const maxWidth = Math.max(0.25, 2 * Math.min(currentOffset - bounds.minOffset, bounds.maxOffset - currentOffset));
+  return Math.min(maxWidth, Math.max(0.25, width));
+}
+
+function openingWallRunBounds(
+  room: RoomBounds,
+  segmentation: WallSegmentation,
+  wall: WallId,
+  currentOffset: number,
+) {
+  const segments = segmentation[wall];
+  if (!segments.length) return null;
+  const center = wall === "north" || wall === "south"
+    ? (room.minX + room.maxX) / 2
+    : (room.minZ + room.maxZ) / 2;
+  const currentFraction = offsetToFraction(room, wall, currentOffset);
+  const index = segments.findIndex((segment) => currentFraction >= segment.start && currentFraction <= segment.end);
+  if (index === -1) return null;
+
+  const base = segments[index];
+  let startIndex = index;
+  let endIndex = index;
+
+  for (let scan = index - 1; scan >= 0; scan -= 1) {
+    if (Math.abs(segments[scan].displacement - base.displacement) > 0.001) break;
+    startIndex = scan;
+  }
+
+  for (let scan = index + 1; scan < segments.length; scan += 1) {
+    if (Math.abs(segments[scan].displacement - base.displacement) > 0.001) break;
+    endIndex = scan;
+  }
+
+  const startEndpoints = segmentWorldEndpoints(room, segmentation, wall, segments[startIndex]);
+  const endEndpoints = segmentWorldEndpoints(room, segmentation, wall, segments[endIndex]);
+  const minAlong = startEndpoints.start;
+  const maxAlong = endEndpoints.end;
+  return {
+    minOffset: minAlong - center,
+    maxOffset: maxAlong - center,
+  };
+}
+
+function clampOpeningWidth(room: RoomBounds, wall: WallId, offset: number, width: number) {
+  const length = wallAxisLength(room, wall);
+  const maxWidth = Math.max(0.25, 2 * (length / 2 - Math.abs(offset)));
+  return Math.min(maxWidth, Math.max(0.25, width));
+}
+
+function connectorOpeningPosition(descriptor: WallConnectorDescriptor, offset: number, y: number): Vec3 {
+  const shifted = descriptor.midCoord + descriptor.directionSign * offset;
+  return descriptor.axis === "z"
+    ? [descriptor.position[0], y, shifted]
+    : [shifted, y, descriptor.position[2]];
+}
+
+function setConnectorBoundaryFraction(
+  segmentation: WallSegmentation,
+  ref: WallConnectorRef,
+  fraction: number,
+): WallSegmentation {
+  const segments = segmentation[ref.wall];
+  const index = segments.findIndex((segment) => segment.id === ref.segmentId);
+  if (index === -1) return segmentation;
+  const segment = segments[index];
+  const previous = segments[index - 1];
+  const next = segments[index + 1];
+  const minGap = 0.05;
+
+  if (ref.side === "start") {
+    if (!previous) return segmentation;
+    const clamped = Math.min(segment.end - minGap, Math.max(previous.start + minGap, fraction));
+    const updated = segments.map((item, itemIndex) => {
+      if (itemIndex === index - 1) return { ...item, end: clamped };
+      if (itemIndex === index) return { ...item, start: clamped };
+      return item;
+    });
+    return { ...segmentation, [ref.wall]: updated };
+  }
+
+  if (!next) return segmentation;
+  const clamped = Math.min(next.end - minGap, Math.max(segment.start + minGap, fraction));
+  const updated = segments.map((item, itemIndex) => {
+    if (itemIndex === index) return { ...item, end: clamped };
+    if (itemIndex === index + 1) return { ...item, start: clamped };
+    return item;
+  });
+  return { ...segmentation, [ref.wall]: updated };
 }
 
 function wallOrientation(wall: WallId): { rotationY: number; normalSign: number } {
@@ -3287,13 +4735,19 @@ type DoorNodeProps = {
   hovered: boolean;
   opacity: number;
   onPointerDown: (event: ThreeEvent<PointerEvent>) => void;
+  onResizePointerDown: (event: ThreeEvent<PointerEvent>) => void;
   onPointerOver: () => void;
   onPointerOut: () => void;
 };
 
-function DoorNode({ door, room, wallSegments, selected, hovered, opacity, onPointerDown, onPointerOver, onPointerOut }: DoorNodeProps) {
-  const { rotationY } = wallOrientation(door.wall);
-  const position = openingWorldPos(room, door.wall, door.offset, door.height / 2, wallSegments[door.wall]);
+function DoorNode({ door, room, wallSegments, selected, hovered, opacity, onPointerDown, onResizePointerDown, onPointerOver, onPointerOut }: DoorNodeProps) {
+  const connector = door.connector
+    ? connectorDescriptor(room, wallSegments, door.connector)
+    : null;
+  const { rotationY } = connector ? { rotationY: connector.rotationY } : wallOrientation(door.wall);
+  const position = connector
+    ? connectorOpeningPosition(connector, door.offset, door.height / 2)
+    : openingWorldPos(room, door.wall, door.offset, door.height / 2, wallSegments[door.wall]);
   const frameColor = fadeSceneColor(SCENE_COLORS.doorFrame, opacity);
   const panelColor = fadeSceneColor(selected ? SCENE_COLORS.wallSelected : SCENE_COLORS.doorPanel, opacity);
   const highlight = selected || hovered;
@@ -3315,7 +4769,7 @@ function DoorNode({ door, room, wallSegments, selected, hovered, opacity, onPoin
       onPointerOut={onPointerOut}
       onPointerDown={onPointerDown}
     >
-      <mesh renderOrder={1}>
+      <mesh renderOrder={1} userData={{ captureRole: "door-panel" }}>
         <boxGeometry args={[door.width, door.height, panelDepth]} />
         <meshStandardMaterial
           color={panelColor}
@@ -3327,7 +4781,7 @@ function DoorNode({ door, room, wallSegments, selected, hovered, opacity, onPoin
           depthWrite={panelOpaque || panelAlpha >= 0.98}
         />
       </mesh>
-      <mesh position={[-door.width / 2, 0, 0]} renderOrder={1}>
+      <mesh position={[-door.width / 2, 0, 0]} renderOrder={1} userData={{ captureRole: "door-frame" }}>
         <boxGeometry args={[0.06, door.height, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
@@ -3336,7 +4790,7 @@ function DoorNode({ door, room, wallSegments, selected, hovered, opacity, onPoin
           depthWrite={frameOpaque}
         />
       </mesh>
-      <mesh position={[door.width / 2, 0, 0]} renderOrder={1}>
+      <mesh position={[door.width / 2, 0, 0]} renderOrder={1} userData={{ captureRole: "door-frame" }}>
         <boxGeometry args={[0.06, door.height, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
@@ -3345,7 +4799,7 @@ function DoorNode({ door, room, wallSegments, selected, hovered, opacity, onPoin
           depthWrite={frameOpaque}
         />
       </mesh>
-      <mesh position={[0, door.height / 2, 0]} renderOrder={1}>
+      <mesh position={[0, door.height / 2, 0]} renderOrder={1} userData={{ captureRole: "door-frame" }}>
         <boxGeometry args={[door.width + 0.12, 0.06, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
@@ -3372,6 +4826,15 @@ function DoorNode({ door, room, wallSegments, selected, hovered, opacity, onPoin
           depthWrite={frameOpaque}
         />
       </mesh>
+      {selected ? (
+        <OpeningResizeHandles3D
+          width={door.width}
+          height={door.height}
+          depth={frameDepth}
+          opacity={opacity}
+          onPointerDown={onResizePointerDown}
+        />
+      ) : null}
     </group>
   );
 }
@@ -3384,14 +4847,20 @@ type WindowNodeProps = {
   hovered: boolean;
   opacity: number;
   onPointerDown: (event: ThreeEvent<PointerEvent>) => void;
+  onResizePointerDown: (event: ThreeEvent<PointerEvent>) => void;
   onPointerOver: () => void;
   onPointerOut: () => void;
 };
 
-function WindowNode({ window, room, wallSegments, selected, hovered, opacity, onPointerDown, onPointerOver, onPointerOut }: WindowNodeProps) {
-  const { rotationY } = wallOrientation(window.wall);
+function WindowNode({ window, room, wallSegments, selected, hovered, opacity, onPointerDown, onResizePointerDown, onPointerOver, onPointerOut }: WindowNodeProps) {
+  const connector = window.connector
+    ? connectorDescriptor(room, wallSegments, window.connector)
+    : null;
+  const { rotationY } = connector ? { rotationY: connector.rotationY } : wallOrientation(window.wall);
   const centerY = window.baseY + window.height / 2;
-  const position = openingWorldPos(room, window.wall, window.offset, centerY, wallSegments[window.wall]);
+  const position = connector
+    ? connectorOpeningPosition(connector, window.offset, centerY)
+    : openingWorldPos(room, window.wall, window.offset, centerY, wallSegments[window.wall]);
   const frameColor = fadeSceneColor(SCENE_COLORS.windowFrame, opacity);
   const glassColor = fadeSceneColor(selected ? SCENE_COLORS.wallSelected : SCENE_COLORS.windowGlass, opacity);
   const highlight = selected || hovered;
@@ -3414,7 +4883,7 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
       onPointerOut={onPointerOut}
       onPointerDown={onPointerDown}
     >
-      <mesh renderOrder={1}>
+      <mesh renderOrder={1} userData={{ captureRole: "window-glass" }}>
         <boxGeometry args={[innerWidth, innerHeight, glassDepth]} />
         <meshStandardMaterial
           color={glassColor}
@@ -3427,7 +4896,7 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
           depthWrite={false}
         />
       </mesh>
-      <mesh position={[-window.width / 2 + frameThickness / 2, 0, 0]} renderOrder={2}>
+      <mesh position={[-window.width / 2 + frameThickness / 2, 0, 0]} renderOrder={2} userData={{ captureRole: "window-frame" }}>
         <boxGeometry args={[frameThickness, window.height, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
@@ -3436,7 +4905,7 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
           depthWrite={frameOpaque}
         />
       </mesh>
-      <mesh position={[window.width / 2 - frameThickness / 2, 0, 0]} renderOrder={2}>
+      <mesh position={[window.width / 2 - frameThickness / 2, 0, 0]} renderOrder={2} userData={{ captureRole: "window-frame" }}>
         <boxGeometry args={[frameThickness, window.height, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
@@ -3445,7 +4914,7 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
           depthWrite={frameOpaque}
         />
       </mesh>
-      <mesh position={[0, window.height / 2 - frameThickness / 2, 0]} renderOrder={2}>
+      <mesh position={[0, window.height / 2 - frameThickness / 2, 0]} renderOrder={2} userData={{ captureRole: "window-frame" }}>
         <boxGeometry args={[innerWidth, frameThickness, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
@@ -3454,7 +4923,7 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
           depthWrite={frameOpaque}
         />
       </mesh>
-      <mesh position={[0, -window.height / 2 + frameThickness / 2, 0]} renderOrder={2}>
+      <mesh position={[0, -window.height / 2 + frameThickness / 2, 0]} renderOrder={2} userData={{ captureRole: "window-frame" }}>
         <boxGeometry args={[innerWidth, frameThickness, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
@@ -3463,7 +4932,7 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
           depthWrite={frameOpaque}
         />
       </mesh>
-      <mesh position={[0, 0, 0]} renderOrder={2}>
+      <mesh position={[0, 0, 0]} renderOrder={2} userData={{ captureRole: "window-frame" }}>
         <boxGeometry args={[0.04, innerHeight, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
@@ -3472,7 +4941,7 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
           depthWrite={mullionOpaque}
         />
       </mesh>
-      <mesh position={[0, 0, 0]} renderOrder={2}>
+      <mesh position={[0, 0, 0]} renderOrder={2} userData={{ captureRole: "window-frame" }}>
         <boxGeometry args={[innerWidth, 0.04, frameDepth]} />
         <meshStandardMaterial
           color={frameColor}
@@ -3481,6 +4950,62 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
           depthWrite={mullionOpaque}
         />
       </mesh>
+      {selected ? (
+        <OpeningResizeHandles3D
+          width={window.width}
+          height={window.height}
+          depth={frameDepth}
+          opacity={opacity}
+          onPointerDown={onResizePointerDown}
+        />
+      ) : null}
+    </group>
+  );
+}
+
+function OpeningResizeHandles3D({
+  width,
+  height,
+  depth,
+  opacity,
+  onPointerDown,
+}: {
+  width: number;
+  height: number;
+  depth: number;
+  opacity: number;
+  onPointerDown: (event: ThreeEvent<PointerEvent>) => void;
+}) {
+  const z = depth / 2 + 0.08;
+  const handles: Vec3[] = [
+    [-width / 2, 0, z],
+    [width / 2, 0, z],
+    [0, height / 2, z],
+  ];
+
+  return (
+    <group userData={{ captureHidden: true }}>
+      {handles.map((position, index) => (
+        <mesh
+          key={`${position[0]}-${position[1]}-${index}`}
+          position={position}
+          onPointerDown={(event) => {
+            event.stopPropagation();
+            onPointerDown(event);
+          }}
+        >
+          <boxGeometry args={[0.12, 0.12, 0.12]} />
+          <meshStandardMaterial
+            color={index === 2 ? SCENE_COLORS.axisY : SCENE_COLORS.axisX}
+            emissive={index === 2 ? SCENE_COLORS.axisY : SCENE_COLORS.axisX}
+            emissiveIntensity={0.25}
+            roughness={0.42}
+            transparent
+            opacity={0.95 * opacity}
+            depthWrite={opacity >= 0.98}
+          />
+        </mesh>
+      ))}
     </group>
   );
 }
@@ -3491,6 +5016,8 @@ const WALL_HIT_PAD = 0.1;
 type SegmentMeshProps = {
   wall: WallId;
   length: number;
+  hitLength: number;
+  hitOffset: Vec3;
   height: number;
   position: Vec3;
   opacity: number;
@@ -3505,6 +5032,8 @@ type SegmentMeshProps = {
 function SegmentMesh({
   wall,
   length,
+  hitLength,
+  hitOffset,
   height,
   position,
   opacity,
@@ -3521,8 +5050,8 @@ function SegmentMesh({
     : [WALL_THICKNESS, height, length];
   const outlineSize: Vec3 = [visibleSize[0] + 0.012, visibleSize[1] + 0.012, visibleSize[2] + 0.012];
   const hitSize: Vec3 = isHorizontal
-    ? [length + 0.36, height, WALL_HIT_PAD]
-    : [WALL_HIT_PAD, height, length + 0.36];
+    ? [hitLength + 0.36, height, WALL_HIT_PAD]
+    : [WALL_HIT_PAD, height, hitLength + 0.36];
   const highlighted = selected || hovered;
 
   return (
@@ -3531,30 +5060,34 @@ function SegmentMesh({
       onPointerOver={onPointerOver}
       onPointerOut={onPointerOut}
     >
-      <mesh castShadow receiveShadow onPointerDown={onPointerDown} renderOrder={0}>
-        <boxGeometry args={visibleSize} />
-        <meshStandardMaterial
-          color={selected ? SCENE_COLORS.wallSelected : SCENE_COLORS.wall}
-          transparent
-          opacity={(selected ? 0.92 : hovered ? 0.84 : 0.74) * opacity}
-          roughness={0.62}
-          emissive={highlighted ? SCENE_COLORS.wallSelected : SCENE_COLORS.wall}
-          emissiveIntensity={selected ? 0.2 : hovered ? 0.1 : 0.05}
-          depthWrite={opacity >= 0.98}
-        />
-      </mesh>
-      <mesh>
-        <boxGeometry args={outlineSize} />
-        <meshBasicMaterial
-          userData={{ captureHidden: true }}
-          color={highlighted ? SCENE_COLORS.wallSelectedEdge : SCENE_COLORS.wallEdge}
-          wireframe
-          transparent
-          opacity={(selected ? 0.65 : hovered ? 0.5 : 0.34) * opacity}
-          depthWrite={false}
-        />
-      </mesh>
-      <mesh onPointerDown={onPointerDown}>
+      {length >= 0.02 ? (
+        <>
+          <mesh castShadow receiveShadow onPointerDown={onPointerDown} renderOrder={0} userData={{ captureRole: "wall" }}>
+            <boxGeometry args={visibleSize} />
+            <meshStandardMaterial
+              color={selected ? SCENE_COLORS.wallSelected : SCENE_COLORS.wall}
+              transparent
+              opacity={(selected ? 0.92 : hovered ? 0.84 : 0.74) * opacity}
+              roughness={0.62}
+              emissive={highlighted ? SCENE_COLORS.wallSelected : SCENE_COLORS.wall}
+              emissiveIntensity={selected ? 0.2 : hovered ? 0.1 : 0.05}
+              depthWrite={opacity >= 0.98}
+            />
+          </mesh>
+          <mesh>
+            <boxGeometry args={outlineSize} />
+            <meshBasicMaterial
+              userData={{ captureHidden: true }}
+              color={highlighted ? SCENE_COLORS.wallSelectedEdge : SCENE_COLORS.wallEdge}
+              wireframe
+              transparent
+              opacity={(selected ? 0.65 : hovered ? 0.5 : 0.34) * opacity}
+              depthWrite={false}
+            />
+          </mesh>
+        </>
+      ) : null}
+      <mesh position={hitOffset} onPointerDown={onPointerDown}>
         <boxGeometry args={hitSize} />
         <meshBasicMaterial
           userData={{ captureHidden: true, cursorHighlight: highlightCursor }}
@@ -3574,18 +5107,23 @@ type ConnectorMeshProps = {
   position: Vec3;
   opacity: number;
   highlight: boolean;
+  onPointerDown?: (event: ThreeEvent<PointerEvent>) => void;
 };
 
-function ConnectorMesh({ wall, depth, height, position, opacity, highlight }: ConnectorMeshProps) {
+function ConnectorMesh({ wall, depth, height, position, opacity, highlight, onPointerDown }: ConnectorMeshProps) {
   const isHorizontal = wall === "north" || wall === "south";
+  const visibleDepth = Math.max(0.02, depth - WALL_THICKNESS);
   const visibleSize: Vec3 = isHorizontal
-    ? [WALL_THICKNESS, height, depth]
-    : [depth, height, WALL_THICKNESS];
+    ? [WALL_THICKNESS, height, visibleDepth]
+    : [visibleDepth, height, WALL_THICKNESS];
   const outlineSize: Vec3 = [visibleSize[0] + 0.012, visibleSize[1] + 0.012, visibleSize[2] + 0.012];
+  const hitSize: Vec3 = isHorizontal
+    ? [WALL_HIT_PAD, height, Math.max(depth, MIN_CONNECTOR_OPENING_LENGTH)]
+    : [Math.max(depth, MIN_CONNECTOR_OPENING_LENGTH), height, WALL_HIT_PAD];
 
   return (
     <group position={position}>
-      <mesh castShadow receiveShadow>
+      <mesh castShadow receiveShadow onPointerDown={onPointerDown} userData={{ captureRole: "wall" }}>
         <boxGeometry args={visibleSize} />
         <meshStandardMaterial
           color={highlight ? SCENE_COLORS.wallSelected : SCENE_COLORS.wall}
@@ -3608,7 +5146,71 @@ function ConnectorMesh({ wall, depth, height, position, opacity, highlight }: Co
           depthWrite={false}
         />
       </mesh>
+      <mesh onPointerDown={onPointerDown}>
+        <boxGeometry args={hitSize} />
+        <meshBasicMaterial
+          userData={{ captureHidden: true }}
+          transparent
+          opacity={0}
+          depthWrite={false}
+        />
+      </mesh>
     </group>
+  );
+}
+
+function DragGhostNode({
+  asset,
+  position,
+  room,
+  wallSegments,
+}: {
+  asset: FurnitureAsset;
+  position: Vec3;
+  room: RoomBounds;
+  wallSegments: WallSegmentation;
+}) {
+  const modelUrl = asset.modelUrl ? proxiedModelUrl(asset.modelUrl) : undefined;
+  const snapped = clampToFloor(position, room, wallSegments);
+
+  return (
+    // Raise 3 mm above the floor so the ghost's transparent fragments don't
+    // depth-fight with the opaque floor mesh at y=0.
+    <group position={[snapped[0], snapped[1] + 0.003, snapped[2]]}>
+      <Suspense fallback={<PrimitiveFurniture primitive={asset.primitive} selected={false} hovered={false} opacity={0.45} />}>
+        {modelUrl ? (
+          <GeneratedModelBoundary
+            resetKey={modelUrl}
+            fallback={<PrimitiveFurniture primitive={asset.primitive} selected={false} hovered={false} opacity={0.45} />}
+          >
+            <GeneratedModel
+              url={modelUrl}
+              selected={false}
+              hovered={false}
+              opacity={0.45}
+              realLengthMeters={asset.realLengthMeters}
+            />
+          </GeneratedModelBoundary>
+        ) : (
+          <PrimitiveFurniture primitive={asset.primitive} selected={false} hovered={false} opacity={0.45} />
+        )}
+      </Suspense>
+      <GhostPlacementRing />
+    </group>
+  );
+}
+
+function GhostPlacementRing() {
+  const meshRef = useRef<THREE.Mesh>(null);
+  useFrame(({ clock }) => {
+    const mat = (meshRef.current as THREE.Mesh | null)?.material as THREE.MeshBasicMaterial | undefined;
+    if (mat) mat.opacity = 0.28 + 0.22 * Math.sin(clock.elapsedTime * 5);
+  });
+  return (
+    <mesh ref={meshRef} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.005, 0]}>
+      <ringGeometry args={[0.38, 0.46, 48]} />
+      <meshBasicMaterial color="#3b8eff" transparent opacity={0.4} depthWrite={false} />
+    </mesh>
   );
 }
 
@@ -3623,8 +5225,11 @@ type FurnitureNodeProps = {
   opacity: number;
   onSelect: () => void;
   onDragStart: (event: ThreeEvent<PointerEvent>) => void;
+  onRotateStart: (event: ThreeEvent<PointerEvent>) => void;
+  onScaleStart: (axis: ShapeResizeAxis, sign: -1 | 1, event: ThreeEvent<PointerEvent>) => void;
   onTransformActiveChange: (active: boolean) => void;
   onChange: (instance: FurnitureInstance) => void;
+  onMeasured?: (footprint: { width: number; depth: number; height: number }) => void;
 };
 
 function FurnitureNode({
@@ -3638,17 +5243,21 @@ function FurnitureNode({
   opacity,
   onSelect,
   onDragStart,
+  onRotateStart,
+  onScaleStart,
   onTransformActiveChange,
   onChange,
+  onMeasured,
 }: FurnitureNodeProps) {
   const groupRef = useRef<THREE.Group>(null);
   const transformMode = tool === "rotate" ? "rotate" : tool === "scale" ? "scale" : "translate";
   const modelUrl = asset?.modelUrl ? proxiedModelUrl(asset.modelUrl) : undefined;
+  const resizeSize = furnitureResizeHandleSize(asset);
 
   useFrame(() => {
     if (!groupRef.current || !selected) return;
     const object = groupRef.current;
-    const nextPosition = clampToFloor([object.position.x, object.position.y, object.position.z], room, wallSegments);
+    const nextPosition = clampToFloor([object.position.x, 0, object.position.z], room, wallSegments);
     if (
       nextPosition[0] !== object.position.x ||
       nextPosition[1] !== object.position.y ||
@@ -3661,9 +5270,10 @@ function FurnitureNode({
   function pushTransform() {
     const object = groupRef.current;
     if (!object) return;
+    const nextPosition = clampToFloor([object.position.x, 0, object.position.z], room, wallSegments);
     onChange({
       ...instance,
-      position: [object.position.x, object.position.y, object.position.z],
+      position: [nextPosition[0], 0, nextPosition[2]],
       rotation: [object.rotation.x, object.rotation.y, object.rotation.z],
       scale: [object.scale.x, object.scale.y, object.scale.z],
     });
@@ -3687,12 +5297,21 @@ function FurnitureNode({
             resetKey={modelUrl}
             fallback={<GeneratedModelFallback primitive={asset.primitive} selected={selected} hovered={hovered} opacity={opacity} />}
           >
-            <GeneratedModel url={modelUrl} selected={selected} hovered={hovered} opacity={opacity} />
+            <GeneratedModel
+              url={modelUrl}
+              selected={selected}
+              hovered={hovered}
+              opacity={opacity}
+              realLengthMeters={asset.realLengthMeters}
+              onMeasured={onMeasured}
+            />
           </GeneratedModelBoundary>
         ) : (
           <PrimitiveFurniture primitive={asset?.primitive ?? "sofa"} selected={selected} hovered={hovered} opacity={opacity} />
         )}
       </Suspense>
+      {selected ? <FurnitureRotateRing size={resizeSize} scale={instance.scale} opacity={opacity} onRotateStart={onRotateStart} /> : null}
+      {selected ? <FurnitureScaleHandles size={resizeSize} scale={instance.scale} opacity={opacity} onScaleStart={onScaleStart} /> : null}
     </group>
   );
 
@@ -3747,7 +5366,8 @@ function ShapeNode({
   useFrame(() => {
     if (!groupRef.current || !selected) return;
     const object = groupRef.current;
-    const nextPosition = clampToFloor([object.position.x, object.position.y, object.position.z], room, wallSegments);
+    const nextY = groundedShapeY(shape.kind, object.scale.y);
+    const nextPosition = clampToFloor([object.position.x, nextY, object.position.z], room, wallSegments);
     if (
       nextPosition[0] !== object.position.x ||
       nextPosition[1] !== object.position.y ||
@@ -3987,6 +5607,11 @@ function ShapePrimitive({ shape, selected, hovered, opacity }: { shape: CustomSh
   );
 }
 
+function groundedShapeY(kind: CustomShape["kind"], scaleY: number) {
+  const safeScaleY = Math.max(0.05, Math.abs(scaleY));
+  return kind === "plane" ? safeScaleY * 0.02 : safeScaleY / 2;
+}
+
 function ShapeGeometry({ kind, color, opacity }: { kind: ShapeKind; color: string; opacity: number }) {
   return (
     <mesh castShadow receiveShadow>
@@ -4019,6 +5644,9 @@ function proxiedModelUrl(modelUrl: string) {
 }
 
 function proxiedMarbleSpzUrl(spzUrl: string) {
+  // Local static assets (anything served straight out of public/) don't need
+  // — and shouldn't go through — the Marble CORS proxy.
+  if (spzUrl.startsWith("/") && !spzUrl.startsWith("//")) return spzUrl;
   return `/api/marble/splat?url=${encodeURIComponent(spzUrl)}`;
 }
 
@@ -4051,9 +5679,85 @@ class GeneratedModelBoundary extends Component<GeneratedModelBoundaryProps, Gene
   }
 }
 
-function GeneratedModel({ url, selected, hovered, opacity }: { url: string; selected: boolean; hovered: boolean; opacity: number }) {
+function GeneratedModel({
+  url,
+  selected,
+  hovered,
+  opacity,
+  realLengthMeters,
+  onMeasured,
+}: {
+  url: string;
+  selected: boolean;
+  hovered: boolean;
+  opacity: number;
+  realLengthMeters?: number;
+  onMeasured?: (footprint: { width: number; depth: number; height: number }) => void;
+}) {
   const gltf = useGLTF(url);
-  const model = useMemo(() => gltf.scene.clone(), [gltf.scene]);
+
+  // Clone the GLB scene AND measure its local bounding box in the same memo,
+  // before the clone is attached to anything in the React-Three tree. This is
+  // crucial: `Box3.setFromObject` reads `matrixWorld`, so once a model is
+  // mounted inside our wrapping <group>, a later measurement would return the
+  // *world* bbox (which already includes whatever scale + Y offset the
+  // previous render baked in). Caching the local bbox once per loaded GLB
+  // means subsequent `realLengthMeters` changes only re-derive the scaling
+  // math — not the bbox — and the floor align stays correct on every
+  // re-render.
+  const { model, localBox, localSize } = useMemo(() => {
+    const clone = gltf.scene.clone();
+    // Deep-clone materials so this instance owns its own material objects.
+    // gltf.scene.clone() copies the Object3D hierarchy but shares material
+    // references, so without this, two GeneratedModel instances with different
+    // opacities (e.g. a placed instance at 1.0 and the drag ghost at 0.45)
+    // fight over the same material and produce incorrect rendering.
+    clone.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      if (Array.isArray(object.material)) {
+        object.material = (object.material as THREE.Material[]).map((m) => m.clone());
+      } else if (object.material) {
+        object.material = (object.material as THREE.Material).clone();
+      }
+    });
+    const box = new THREE.Box3().setFromObject(clone);
+    const size = new THREE.Vector3();
+    if (!box.isEmpty()) box.getSize(size);
+    return { model: clone, localBox: box, localSize: size };
+  }, [gltf.scene]);
+
+  // Compute scale + Y offset so that:
+  //   - when we have a Gemini-estimated real-world length, the longest axis
+  //     of the GLB matches that physical size in meters
+  //   - the bottom of the model always rests exactly on the floor (y = 0)
+  //
+  // We also report the post-scale axis-aligned size so 2D blueprint views
+  // can draw an accurate top-down bounding rectangle for this asset.
+  const { uniformScale, floorOffsetY, footprint } = useMemo(() => {
+    if (localBox.isEmpty() || !Number.isFinite(localBox.min.y)) {
+      return { uniformScale: 1, floorOffsetY: 0, footprint: null as null | { width: number; depth: number; height: number } };
+    }
+    const longest = Math.max(localSize.x, localSize.y, localSize.z);
+    const s =
+      typeof realLengthMeters === "number" && realLengthMeters > 0 && longest > 0
+        ? realLengthMeters / longest
+        : 1;
+    return {
+      uniformScale: s,
+      floorOffsetY: -localBox.min.y * s,
+      footprint: { width: localSize.x * s, depth: localSize.z * s, height: localSize.y * s },
+    };
+  }, [localBox, localSize, realLengthMeters]);
+
+  const onMeasuredRef = useRef(onMeasured);
+  useEffect(() => {
+    onMeasuredRef.current = onMeasured;
+  }, [onMeasured]);
+
+  useEffect(() => {
+    if (!footprint) return;
+    onMeasuredRef.current?.(footprint);
+  }, [footprint]);
 
   useEffect(() => {
     model.traverse((object) => {
@@ -4069,9 +5773,22 @@ function GeneratedModel({ url, selected, hovered, opacity }: { url: string; sele
     });
   }, [model, opacity]);
 
+  // Dispose cloned materials on unmount to avoid GPU memory leaks.
+  useEffect(() => {
+    return () => {
+      model.traverse((object) => {
+        if (!(object instanceof THREE.Mesh)) return;
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        materials.forEach((m) => { if (m) m.dispose(); });
+      });
+    };
+  }, [model]);
+
   return (
     <group>
-      <primitive object={model} />
+      <group position={[0, floorOffsetY, 0]} scale={[uniformScale, uniformScale, uniformScale]}>
+        <primitive object={model} />
+      </group>
       {selected || hovered ? <SelectionRing opacity={opacity} selected={selected} /> : null}
     </group>
   );
@@ -4220,6 +5937,12 @@ function fadedMaterialProps(opacity: number) {
   };
 }
 
+function isTrackpadWheel(event: WheelEvent) {
+  if (event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) return false;
+  if (Math.abs(event.deltaX) > 0) return true;
+  return Math.abs(event.deltaY) < TRACKPAD_PIXEL_DELTA_THRESHOLD;
+}
+
 function SelectionRing({ opacity = 1, selected = true }: { opacity?: number; selected?: boolean }) {
   return (
     <mesh userData={{ captureHidden: true }} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.025, 0]}>
@@ -4229,21 +5952,120 @@ function SelectionRing({ opacity = 1, selected = true }: { opacity?: number; sel
   );
 }
 
-function ToolHintBanner({ tool }: { tool: ToolMode }) {
-  const hint =
-    tool === "cut-wall"
-      ? "Click on a wall to slice it, then drag in the same motion to pull the new face in or out. Each cut produces an independent segment with a connector wall."
-      : tool === "add-door"
-        ? "Click on any wall to place a new door. Switch to Select to drag it along the wall."
-        : tool === "add-window"
-          ? "Click on a wall (at any height) to place a window. Switch to Select to slide or raise it."
-          : null;
-
-  if (!hint) return null;
+function FurnitureRotateRing({
+  size,
+  scale,
+  opacity,
+  onRotateStart,
+}: {
+  size: Vec3;
+  scale: Vec3;
+  opacity: number;
+  onRotateStart: (event: ThreeEvent<PointerEvent>) => void;
+}) {
+  const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
+    event.stopPropagation();
+    onRotateStart(event);
+  };
+  const safeScale = scale.map((value) => Math.max(0.05, Math.abs(value))) as Vec3;
+  const inverseScale: Vec3 = [1 / safeScale[0], 1 / safeScale[1], 1 / safeScale[2]];
+  const worldHeight = size[1] * safeScale[1];
+  const y = Math.max(0.72, worldHeight + 0.32) / safeScale[1];
+  const radius = Math.max(0.78, Math.max(size[0] * safeScale[0], size[2] * safeScale[2]) / 2 + 0.24);
 
   return (
-    <div className="pointer-events-none absolute inset-x-4 bottom-4 mx-auto max-w-md rounded-md border border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-overlay)_92%,transparent)] px-3 py-2 text-center text-xs font-medium text-[var(--color-accent-hover)] shadow-[var(--shadow-float)] [backdrop-filter:var(--panel-blur)]">
-      {hint}
-    </div>
+    <group
+      userData={{ captureHidden: true }}
+      position={[0, y, 0]}
+      scale={inverseScale}
+      onPointerDown={handlePointerDown}
+      onPointerOver={(event) => {
+        event.stopPropagation();
+        document.body.style.cursor = "grab";
+      }}
+      onPointerOut={() => {
+        document.body.style.cursor = "";
+      }}
+    >
+      <mesh rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[radius, 0.014, 8, 72]} />
+        <meshBasicMaterial color="#FFFFFF" transparent opacity={0.78 * opacity} depthWrite={false} />
+      </mesh>
+      <mesh position={[radius + 0.1, 0, 0]}>
+        <sphereGeometry args={[0.075, 18, 12]} />
+        <meshStandardMaterial
+          color="#FFFFFF"
+          emissive="#FFFFFF"
+          emissiveIntensity={0.18}
+          roughness={0.32}
+          transparent
+          opacity={0.96 * opacity}
+          depthWrite={opacity >= 0.98}
+        />
+      </mesh>
+      <mesh rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[radius, 0.08, 8, 72]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+      </mesh>
+    </group>
+  );
+}
+
+function FurnitureScaleHandles({
+  size,
+  scale,
+  opacity,
+  onScaleStart,
+}: {
+  size: Vec3;
+  scale: Vec3;
+  opacity: number;
+  onScaleStart: (axis: ShapeResizeAxis, sign: -1 | 1, event: ThreeEvent<PointerEvent>) => void;
+}) {
+  const safeScale = scale.map((value) => Math.max(0.05, Math.abs(value))) as Vec3;
+  const inverseScale: Vec3 = [1 / safeScale[0], 1 / safeScale[1], 1 / safeScale[2]];
+  const halfX = Math.max(0.36, size[0] / 2 + 0.16);
+  const halfY = Math.max(0.34, size[1] / 2 + 0.16);
+  const halfZ = Math.max(0.36, size[2] / 2 + 0.16);
+  const handles: Array<{ axis: ShapeResizeAxis; sign: -1 | 1; position: Vec3; color: string }> = [
+    { axis: 0, sign: -1, position: [-halfX, halfY * 0.52, 0], color: SCENE_COLORS.axisX },
+    { axis: 0, sign: 1, position: [halfX, halfY * 0.52, 0], color: SCENE_COLORS.axisX },
+    { axis: 1, sign: 1, position: [0, halfY * 2, 0], color: SCENE_COLORS.axisY },
+    { axis: 2, sign: -1, position: [0, halfY * 0.52, -halfZ], color: SCENE_COLORS.axisZ },
+    { axis: 2, sign: 1, position: [0, halfY * 0.52, halfZ], color: SCENE_COLORS.axisZ },
+  ];
+
+  return (
+    <group userData={{ captureHidden: true }}>
+      {handles.map((handle) => (
+        <mesh
+          key={`${handle.axis}-${handle.sign}`}
+          position={handle.position}
+          scale={inverseScale}
+          onPointerDown={(event) => {
+            event.stopPropagation();
+            onScaleStart(handle.axis, handle.sign, event);
+          }}
+          onPointerOver={(event) => {
+            event.stopPropagation();
+            document.body.style.cursor = "nwse-resize";
+          }}
+          onPointerOut={() => {
+            document.body.style.cursor = "";
+          }}
+        >
+          <boxGeometry args={[0.14, 0.14, 0.14]} />
+          <meshStandardMaterial
+            color={handle.color}
+            emissive={handle.color}
+            emissiveIntensity={0.24}
+            roughness={0.42}
+            transparent
+            opacity={0.94 * opacity}
+            depthWrite={opacity >= 0.98}
+          />
+        </mesh>
+      ))}
+    </group>
   );
 }

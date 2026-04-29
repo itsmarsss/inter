@@ -1,12 +1,13 @@
 "use client";
 
-import { type ReactNode, useState } from "react";
+import { type CSSProperties, type ReactNode, useState } from "react";
 import type {
   CustomShape,
   Door,
   FurnitureAsset,
   FurnitureAssetMap,
   FurnitureInstance,
+  LibraryEntry,
   MarbleResult,
   RoomBounds,
   SceneCamera,
@@ -19,12 +20,12 @@ import type {
   WindowOpening,
 } from "../state/types";
 import { BlueprintDialog } from "./BlueprintDialog";
-import { BottomToolbar } from "./BottomToolbar";
 import { FurniturePanel } from "./FurniturePanel";
 import { IconRail, type RailSection } from "./IconRail";
 import { MinimapPanel } from "./MinimapPanel";
 import { ModeBar, type ViewMode } from "./ModeBar";
 import { ObjectsPanel } from "./ObjectsPanel";
+import { ProductSearchPanel } from "./ProductSearchPanel";
 import { Viewport } from "./Viewport";
 import { WorldPanel } from "./WorldPanel";
 
@@ -58,16 +59,25 @@ type PrecisionLayoutProps = {
   onAddWindow: () => void;
   onRemoveDoor: (id: string) => void;
   onRemoveWindow: (id: string) => void;
+  onRemoveFurnitureInstance: (id: string) => void;
+  onRotateFurnitureInstance: (id: string, deltaRad: number) => void;
+  onRemoveShape: (id: string) => void;
   onRemoveWallSegment: (wall: WallId, id: string) => void;
   onResetWallSegments: () => void;
 
   onGenerateFurniture: (prompt: string) => void;
+  libraryEntries: LibraryEntry[];
+  savingAssetId: string | null;
+  onSaveAsset: (asset: FurnitureAsset) => void;
+  onDeleteLibraryEntry: (id: string) => void;
   upload: UploadStatus;
   stylePrompt: string;
   onStylePromptChange: (prompt: string) => void;
   marble: MarbleResult;
   onGenerateRoom: () => void;
   onCancelRun: () => void;
+  /** When true, all chrome animates in from its respective edge. */
+  entering?: boolean;
 };
 
 export function PrecisionLayout({
@@ -81,6 +91,7 @@ export function PrecisionLayout({
   doors,
   windows,
   wallSegments,
+  assetById,
   room,
   tool,
   selected,
@@ -95,21 +106,55 @@ export function PrecisionLayout({
   onAddWindow,
   onRemoveDoor,
   onRemoveWindow,
+  onRemoveFurnitureInstance,
+  onRotateFurnitureInstance,
+  onRemoveShape,
   onRemoveWallSegment,
   onResetWallSegments,
   onGenerateFurniture,
+  libraryEntries,
+  savingAssetId,
+  onSaveAsset,
+  onDeleteLibraryEntry,
   upload,
   stylePrompt,
   onStylePromptChange,
   marble,
   onGenerateRoom,
   onCancelRun,
+  entering = false,
 }: PrecisionLayoutProps) {
   const [activeSection, setActiveSection] = useState<RailSection>("objects");
   const [panelOpen, setPanelOpen] = useState(true);
   const [blueprintDialogOpen, setBlueprintDialogOpen] = useState(false);
 
   const splatAvailable = marble.status === "complete" && Boolean(marble.spzUrl);
+
+  // Build an animation shorthand for the entrance animations. Each wrapper
+  // div uses `position: absolute; inset: 0` (a full-screen positioned box),
+  // so children that already use absolute positioning land in the same spot
+  // they would without the wrapper.
+  //
+  // We also need to keep the chrome fully hidden BEFORE the `entering` phase
+  // begins. Otherwise, during the revealing-fade phase the editor is already
+  // visible (opacity 1) but no animation is applied yet, so the chrome shows
+  // at its final position. Then when the `entering` phase starts and we
+  // attach `animation: ... both`, the element snaps to the keyframes' "from"
+  // state (off-screen) for the leading delay before animating back in —
+  // producing a visible appear → hide → re-appear flash.
+  //
+  // `hasEntered` latches true the first time `entering` is true; it never
+  // flips back. Combined with `opacity: 0` when neither flag is set, the
+  // chrome stays hidden until its keyframes take over, then the keyframes'
+  // `forwards` fill mode keeps it visible afterwards.
+  // Latch: once `entering` has been true, the chrome has begun (or already
+  // finished) its entrance animation, so it should never be force-hidden
+  // again. Setting state during render (with the same value short-circuit)
+  // is the documented React pattern for deriving sticky state from props —
+  // the second render runs immediately and uses the latched value.
+  const [hasEntered, setHasEntered] = useState(entering);
+  if (entering && !hasEntered) setHasEntered(true);
+  const preHidden = !entering && !hasEntered;
 
   function handleSectionChange(section: RailSection) {
     if (section === activeSection && panelOpen) {
@@ -118,11 +163,6 @@ export function PrecisionLayout({
       setActiveSection(section);
       setPanelOpen(true);
     }
-  }
-
-  function openWorld() {
-    setActiveSection("world");
-    setPanelOpen(true);
   }
 
   return (
@@ -139,70 +179,111 @@ export function PrecisionLayout({
       {/* Layer 0 — full-screen 3D viewport */}
       <Viewport room={room}>{viewport}</Viewport>
 
-      {/* Layer 1 — icon rail (always visible) */}
-      <IconRail
-        activeSection={activeSection}
-        panelOpen={panelOpen}
-        onSectionChange={handleSectionChange}
-      />
+      {/* Layer 1 — icon rail (slides from left) */}
+      <div style={wrapperStyleFor("ui-from-left", 0, entering, preHidden)}>
+        <div style={{ pointerEvents: "auto" }}>
+          <IconRail
+            activeSection={activeSection}
+            panelOpen={panelOpen}
+            onSectionChange={handleSectionChange}
+          />
+        </div>
+      </div>
 
-      {/* Layer 1 — left panels (always mounted, width-animated) */}
-      <ObjectsPanel
-        open={panelOpen && activeSection === "objects"}
-        tool={tool}
-        onToolChange={onToolChange}
-        selected={selected}
-        onSelect={onSelect}
-        doors={doors}
-        windows={windows}
-        wallSegments={wallSegments}
-        shapes={customShapes}
-        cameras={cameras}
-        activeShapeKind={activeShapeKind}
-        onActiveShapeKindChange={onActiveShapeKindChange}
-        onAddDoor={onAddDoor}
-        onAddWindow={onAddWindow}
-        onRemoveDoor={onRemoveDoor}
-        onRemoveWindow={onRemoveWindow}
-        onRemoveWallSegment={onRemoveWallSegment}
-        onResetWallSegments={onResetWallSegments}
-        onClose={() => setPanelOpen(false)}
-      />
+      {/* Layer 1 — left panels (slide from left, slightly delayed) */}
+      <div style={wrapperStyleFor("ui-from-left", 80, entering, preHidden)}>
+        <div style={{ pointerEvents: "auto" }}>
+          <ObjectsPanel
+            open={panelOpen && activeSection === "objects"}
+            tool={tool}
+            onToolChange={onToolChange}
+            selected={selected}
+            onSelect={onSelect}
+            furnitureInstances={furnitureInstances}
+            doors={doors}
+            windows={windows}
+            wallSegments={wallSegments}
+            shapes={customShapes}
+            cameras={cameras}
+            activeShapeKind={activeShapeKind}
+            onActiveShapeKindChange={onActiveShapeKindChange}
+            onAddDoor={onAddDoor}
+            onAddWindow={onAddWindow}
+            onRemoveDoor={onRemoveDoor}
+            onRemoveWindow={onRemoveWindow}
+            onRemoveFurnitureInstance={onRemoveFurnitureInstance}
+            onRotateFurnitureInstance={onRotateFurnitureInstance}
+            onRemoveShape={onRemoveShape}
+            onRemoveWallSegment={onRemoveWallSegment}
+            onResetWallSegments={onResetWallSegments}
+            onClose={() => setPanelOpen(false)}
+          />
+        </div>
+      </div>
 
-      <FurniturePanel
-        open={panelOpen && activeSection === "furniture"}
-        assets={furnitureAssets}
-        onGenerate={onGenerateFurniture}
-        onUploadModel={onUploadModel}
-        onClose={() => setPanelOpen(false)}
-      />
+      <div style={wrapperStyleFor("ui-from-left", 80, entering, preHidden)}>
+        <div style={{ pointerEvents: "auto" }}>
+          <FurniturePanel
+            open={panelOpen && activeSection === "furniture"}
+            assets={furnitureAssets}
+            libraryEntries={libraryEntries}
+            savingAssetId={savingAssetId}
+            onGenerate={onGenerateFurniture}
+            onUploadModel={onUploadModel}
+            onSaveAsset={onSaveAsset}
+            onDeleteLibraryEntry={onDeleteLibraryEntry}
+            onClose={() => setPanelOpen(false)}
+          />
+        </div>
+      </div>
 
-      <WorldPanel
-        open={panelOpen && activeSection === "world"}
-        prompt={stylePrompt}
-        marble={marble}
-        onPromptChange={onStylePromptChange}
-        onGenerate={onGenerateRoom}
-        onCancelRun={onCancelRun}
-        onClose={() => setPanelOpen(false)}
-      />
+      <div style={wrapperStyleFor("ui-from-left", 80, entering, preHidden)}>
+        <div style={{ pointerEvents: "auto" }}>
+          <ProductSearchPanel
+            open={panelOpen && activeSection === "products"}
+            assets={furnitureAssets}
+            instances={furnitureInstances}
+            assetById={assetById}
+            libraryEntries={libraryEntries}
+            onClose={() => setPanelOpen(false)}
+          />
+        </div>
+      </div>
+
+      <div style={wrapperStyleFor("ui-from-left", 80, entering, preHidden)}>
+        <div style={{ pointerEvents: "auto" }}>
+          <WorldPanel
+            open={panelOpen && activeSection === "world"}
+            prompt={stylePrompt}
+            marble={marble}
+            onPromptChange={onStylePromptChange}
+            onGenerate={onGenerateRoom}
+            onCancelRun={onCancelRun}
+            onClose={() => setPanelOpen(false)}
+          />
+        </div>
+      </div>
 
       {/* Layer 2 — floating chrome (never covers viewport center) */}
-      <ModeBar
-        activeMode={viewMode}
-        onModeChange={onViewModeChange}
-        splatAvailable={splatAvailable}
-      />
-      <MinimapPanel
-        room={room}
-        blueprint={blueprintPreview}
-        onExpand={() => setBlueprintDialogOpen(true)}
-      />
+      <div style={wrapperStyleFor("ui-from-top", 40, entering, preHidden)}>
+        <div style={{ pointerEvents: "auto" }}>
+          <ModeBar
+            activeMode={viewMode}
+            onModeChange={onViewModeChange}
+            splatAvailable={splatAvailable}
+          />
+        </div>
+      </div>
 
-      <BottomToolbar
-        worldActive={activeSection === "world" && panelOpen}
-        onOpenWorld={openWorld}
-      />
+      <div style={wrapperStyleFor("ui-from-right", 80, entering, preHidden)}>
+        <div style={{ pointerEvents: "auto" }}>
+          <MinimapPanel
+            room={room}
+            blueprint={blueprintPreview}
+            onExpand={() => setBlueprintDialogOpen(true)}
+          />
+        </div>
+      </div>
 
       {/* Upload error toast */}
       {upload.status === "failed" && (
@@ -234,4 +315,24 @@ export function PrecisionLayout({
       />
     </div>
   );
+}
+
+const ENTRANCE_EASE = "cubic-bezier(0.22, 1, 0.36, 1)";
+
+// Pure helper kept outside the component so it doesn't capture refs from the
+// render scope (which would trip our `react-hooks/refs` lint rule). All
+// inputs are plain values resolved by the caller in the render body.
+function wrapperStyleFor(
+  name: string,
+  delay: number,
+  entering: boolean,
+  preHidden: boolean,
+): CSSProperties {
+  return {
+    position: "absolute",
+    inset: 0,
+    pointerEvents: "none",
+    opacity: preHidden ? 0 : undefined,
+    animation: entering ? `${name} 0.55s ${ENTRANCE_EASE} ${delay}ms both` : undefined,
+  };
 }
