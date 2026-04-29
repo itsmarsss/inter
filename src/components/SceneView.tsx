@@ -22,7 +22,6 @@ import {
   isSegmentationDefault,
   offsetToFraction,
   resizeRoomFromWall,
-  roomDimensions,
   setRoomDimensionFromWall,
   setSegmentDisplacement,
   wallAxisLength,
@@ -151,7 +150,11 @@ type ShapeResizeSession = {
   sign: -1 | 1;
   startScale: Vec3;
   startLocalValue: number;
+  screenAxisX: number;
+  screenAxisY: number;
+  screenAxisLengthSq: number;
   startClientY: number;
+  startClientX: number;
   latestClientX: number;
   latestClientY: number;
   rafId: number | null;
@@ -183,8 +186,15 @@ type InstanceRotateSession = {
 type InstanceScaleSession = {
   instanceId: string;
   pointerId: number;
+  axis: ShapeResizeAxis;
+  sign: -1 | 1;
   startScale: Vec3;
-  startDistance: number;
+  baseSize: Vec3;
+  screenAxisX: number;
+  screenAxisY: number;
+  screenAxisLengthSq: number;
+  startClientX: number;
+  startClientY: number;
   latestClientX: number;
   latestClientY: number;
   rafId: number | null;
@@ -445,6 +455,23 @@ function furnitureSplatRegion(instance: FurnitureInstance, primitive: FurnitureA
     size: scaleSize(profile.size, instance.scale),
     shape: profile.shape,
   };
+}
+
+function furnitureResizeHandleSize(asset?: FurnitureAsset): Vec3 {
+  const profile = FURNITURE_REGION_PROFILES[asset?.primitive ?? "sofa"];
+  const footprint = asset?.footprint;
+  if (
+    footprint &&
+    Number.isFinite(footprint.width) &&
+    Number.isFinite(footprint.depth) &&
+    Number.isFinite(footprint.height) &&
+    footprint.width > 0 &&
+    footprint.depth > 0 &&
+    footprint.height > 0
+  ) {
+    return [footprint.width, footprint.height, footprint.depth];
+  }
+  return profile.size;
 }
 
 function shapeSplatRegion(shape: CustomShape): SplatObjectRegion {
@@ -1056,16 +1083,21 @@ function SceneContent({
       const instance = instancesRef.current.find((item) => item.id === session.instanceId);
       if (!instance) return;
 
-      const point = projectPointerToFloor(session.latestClientX, session.latestClientY);
-      if (!point) return;
+      let nextAxisScale = session.startScale[session.axis];
+      if (session.axis === 1) {
+        nextAxisScale = session.startScale[1] + session.sign * (session.startClientY - session.latestClientY) * 0.0125;
+      } else {
+        if (session.screenAxisLengthSq < 16) return;
+        const deltaX = session.latestClientX - session.startClientX;
+        const deltaY = session.latestClientY - session.startClientY;
+        const meters =
+          (deltaX * session.screenAxisX + deltaY * session.screenAxisY) / session.screenAxisLengthSq;
+        const baseSize = Math.max(0.1, session.baseSize[session.axis]);
+        nextAxisScale = session.startScale[session.axis] + session.sign * (2 * meters) / baseSize;
+      }
 
-      const currentDistance = pointerDistanceOnFloor(instance.position, point);
-      const factor = Math.min(5, Math.max(0.2, currentDistance / Math.max(0.001, session.startDistance)));
-      const nextScale: Vec3 = [
-        Math.max(0.05, session.startScale[0] * factor),
-        Math.max(0.05, session.startScale[1] * factor),
-        Math.max(0.05, session.startScale[2] * factor),
-      ];
+      const nextScale: Vec3 = [...session.startScale];
+      nextScale[session.axis] = Math.max(0.05, Math.abs(nextAxisScale));
 
       onInstancesChangeRef.current(
         instancesRef.current.map((item) =>
@@ -1253,18 +1285,26 @@ function SceneContent({
 
       let nextAxisScale = session.startScale[session.axis];
       if (session.axis === 1) {
-        nextAxisScale = session.startScale[1] + session.sign * (session.startClientY - session.latestClientY) * 0.025;
+        nextAxisScale = session.startScale[1] + session.sign * (session.startClientY - session.latestClientY) * 0.0125;
       } else {
-        const nextLocalValue = shapeLocalPointerValue(
-          shape,
-          session.axis,
-          session.latestClientX,
-          session.latestClientY,
-          projectPointerToFloor,
-        );
-        if (nextLocalValue === null) return;
         const sensitivity = session.axis === 2 ? 1 : 2;
-        nextAxisScale = session.startScale[session.axis] + session.sign * sensitivity * (nextLocalValue - session.startLocalValue);
+        if (session.screenAxisLengthSq >= 16) {
+          const deltaX = session.latestClientX - session.startClientX;
+          const deltaY = session.latestClientY - session.startClientY;
+          const meters =
+            (deltaX * session.screenAxisX + deltaY * session.screenAxisY) / session.screenAxisLengthSq;
+          nextAxisScale = session.startScale[session.axis] + session.sign * sensitivity * meters;
+        } else {
+          const nextLocalValue = shapeLocalPointerValue(
+            shape,
+            session.axis,
+            session.latestClientX,
+            session.latestClientY,
+            projectPointerToFloor,
+          );
+          if (nextLocalValue === null) return;
+          nextAxisScale = session.startScale[session.axis] + session.sign * sensitivity * (nextLocalValue - session.startLocalValue);
+        }
       }
 
       const nextScale: Vec3 = [...session.startScale];
@@ -1994,6 +2034,7 @@ function SceneContent({
     if (startLocalValue === null) return;
 
     const controls = orbitControlsRef.current;
+    const screenAxis = screenAxisForLocalAxis(shape.position, shape.rotation, axis, camera, gl.domElement);
     shapeResizeRef.current = {
       shapeId: shape.id,
       pointerId: event.pointerId,
@@ -2001,6 +2042,10 @@ function SceneContent({
       sign,
       startScale: [...shape.scale],
       startLocalValue,
+      screenAxisX: screenAxis.x,
+      screenAxisY: screenAxis.y,
+      screenAxisLengthSq: screenAxis.lengthSq,
+      startClientX: event.clientX,
       startClientY: event.clientY,
       latestClientX: event.clientX,
       latestClientY: event.clientY,
@@ -2022,21 +2067,33 @@ function SceneContent({
     onSelect({ type: "shape", id: shape.id });
   }
 
-  function handleInstanceScalePointerDown(instance: FurnitureInstance, event: ThreeEvent<PointerEvent>) {
+  function handleInstanceScalePointerDown(
+    instance: FurnitureInstance,
+    baseSize: Vec3,
+    axis: ShapeResizeAxis,
+    sign: -1 | 1,
+    event: ThreeEvent<PointerEvent>,
+  ) {
     if (viewMode !== "blockout") return;
     if (tool !== "select" && tool !== "move" && tool !== "scale") return;
     if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
 
     event.stopPropagation();
-    const point = projectPointerToFloor(event.clientX, event.clientY);
-    if (!point) return;
 
     const controls = orbitControlsRef.current;
+    const screenAxis = screenAxisForLocalAxis(instance.position, instance.rotation, axis, camera, gl.domElement);
     instanceScaleRef.current = {
       instanceId: instance.id,
       pointerId: event.pointerId,
+      axis,
+      sign,
       startScale: [...instance.scale],
-      startDistance: pointerDistanceOnFloor(instance.position, point),
+      baseSize,
+      screenAxisX: screenAxis.x,
+      screenAxisY: screenAxis.y,
+      screenAxisLengthSq: screenAxis.lengthSq,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
       latestClientX: event.clientX,
       latestClientY: event.clientY,
       rafId: null,
@@ -2402,6 +2459,7 @@ function SceneContent({
         />
         {instances.map((instance) => {
           const asset = assetById?.get(instance.assetId) ?? assets.find((item) => item.id === instance.assetId);
+          const resizeSize = furnitureResizeHandleSize(asset);
           return (
             <FurnitureNode
               key={instance.id}
@@ -2418,7 +2476,7 @@ function SceneContent({
                 handleObjectPointerDown({ type: "furniture", id: instance.id }, instance.position, event)
               }
               onRotateStart={(event) => handleInstanceRotatePointerDown(instance, event)}
-              onScaleStart={(event) => handleInstanceScalePointerDown(instance, event)}
+              onScaleStart={(axis, sign, event) => handleInstanceScalePointerDown(instance, resizeSize, axis, sign, event)}
               onTransformActiveChange={handleTransformActiveChange}
               onChange={updateInstance}
               onMeasured={
@@ -2500,8 +2558,8 @@ function SceneContent({
         ))}
       </group>
       {viewMode === "blockout" ? (
-        <Html position={[room.minX, 0.04, room.maxZ + 0.22]} center zIndexRange={[0, 0]}>
-          <RoomDimensionBadge room={room} onRoomChange={onRoomChange} />
+        <Html position={[floorBounds(room, wallSegments).minX, 0.04, floorBounds(room, wallSegments).maxZ + 0.22]} center zIndexRange={[0, 0]}>
+          <RoomDimensionBadge room={room} wallSegments={wallSegments} onRoomChange={onRoomChange} />
         </Html>
       ) : null}
     </>
@@ -2798,12 +2856,19 @@ function eastNorthDisplacement(segmentation: WallSegmentation) {
 
 function RoomDimensionBadge({
   room,
+  wallSegments,
   onRoomChange,
 }: {
   room: RoomBounds;
+  wallSegments: WallSegmentation;
   onRoomChange: (room: RoomBounds) => void;
 }) {
-  const dimensions = roomDimensions(room);
+  const bounds = floorBounds(room, wallSegments);
+  const dimensions = {
+    width: bounds.maxX - bounds.minX,
+    depth: bounds.maxZ - bounds.minZ,
+    height: room.height,
+  };
 
   function commitWidth(value: string) {
     const nextWidth = Number(value);
@@ -2888,6 +2953,22 @@ function formatDimensionValue(value: number) {
   return value.toFixed(1);
 }
 
+function floorBounds(room: RoomBounds, wallSegments: WallSegmentation) {
+  let minX = room.minX;
+  let maxX = room.maxX;
+  let minZ = room.minZ;
+  let maxZ = room.maxZ;
+
+  for (const point of buildFloorPolygon(room, wallSegments)) {
+    minX = Math.min(minX, point.x);
+    maxX = Math.max(maxX, point.x);
+    minZ = Math.min(minZ, point.z);
+    maxZ = Math.max(maxZ, point.z);
+  }
+
+  return { minX, maxX, minZ, maxZ };
+}
+
 function fadeSceneColor(color: string, opacity: number) {
   return new THREE.Color(color).lerp(new THREE.Color(SCENE_COLORS.background), 1 - THREE.MathUtils.clamp(opacity, 0, 1));
 }
@@ -2927,10 +3008,6 @@ function pointerAngleAroundPosition(
   const point = projectPointerToFloor(clientX, clientY);
   if (!point) return null;
   return Math.atan2(point[2] - position[2], point[0] - position[0]);
-}
-
-function pointerDistanceOnFloor(position: Vec3, point: Vec3) {
-  return Math.hypot(point[0] - position[0], point[2] - position[2]);
 }
 
 function shortestAngleDelta(nextAngle: number, startAngle: number) {
@@ -3497,6 +3574,27 @@ function screenAxisForConnectorBoundary(
       ? [reference[0] + 1, reference[1], reference[2]]
       : [reference[0], reference[1], reference[2] + 1];
   const start = worldToClientPoint(reference, camera, element);
+  const end = worldToClientPoint(axisEnd, camera, element);
+  const x = end.x - start.x;
+  const y = end.y - start.y;
+  return { x, y, lengthSq: x * x + y * y };
+}
+
+function screenAxisForLocalAxis(
+  position: Vec3,
+  rotation: Vec3,
+  axis: ShapeResizeAxis,
+  camera: THREE.Camera,
+  element: HTMLCanvasElement,
+) {
+  const axisVector = new THREE.Vector3(axis === 0 ? 1 : 0, axis === 1 ? 1 : 0, axis === 2 ? 1 : 0);
+  axisVector.applyEuler(new THREE.Euler(...rotation));
+  const axisEnd: Vec3 = [
+    position[0] + axisVector.x,
+    position[1] + axisVector.y,
+    position[2] + axisVector.z,
+  ];
+  const start = worldToClientPoint(position, camera, element);
   const end = worldToClientPoint(axisEnd, camera, element);
   const x = end.x - start.x;
   const y = end.y - start.y;
@@ -5117,7 +5215,7 @@ type FurnitureNodeProps = {
   onSelect: () => void;
   onDragStart: (event: ThreeEvent<PointerEvent>) => void;
   onRotateStart: (event: ThreeEvent<PointerEvent>) => void;
-  onScaleStart: (event: ThreeEvent<PointerEvent>) => void;
+  onScaleStart: (axis: ShapeResizeAxis, sign: -1 | 1, event: ThreeEvent<PointerEvent>) => void;
   onTransformActiveChange: (active: boolean) => void;
   onChange: (instance: FurnitureInstance) => void;
   onMeasured?: (footprint: { width: number; depth: number; height: number }) => void;
@@ -5143,7 +5241,7 @@ function FurnitureNode({
   const groupRef = useRef<THREE.Group>(null);
   const transformMode = tool === "rotate" ? "rotate" : tool === "scale" ? "scale" : "translate";
   const modelUrl = asset?.modelUrl ? proxiedModelUrl(asset.modelUrl) : undefined;
-  const profile = FURNITURE_REGION_PROFILES[asset?.primitive ?? "sofa"];
+  const resizeSize = furnitureResizeHandleSize(asset);
 
   useFrame(() => {
     if (!groupRef.current || !selected) return;
@@ -5201,8 +5299,8 @@ function FurnitureNode({
           <PrimitiveFurniture primitive={asset?.primitive ?? "sofa"} selected={selected} hovered={hovered} opacity={opacity} />
         )}
       </Suspense>
-      {selected ? <FurnitureRotateRing onRotateStart={onRotateStart} /> : null}
-      {selected ? <FurnitureScaleHandles size={profile.size} opacity={opacity} onScaleStart={onScaleStart} /> : null}
+      {selected ? <FurnitureRotateRing size={resizeSize} scale={instance.scale} opacity={opacity} onRotateStart={onRotateStart} /> : null}
+      {selected ? <FurnitureScaleHandles size={resizeSize} scale={instance.scale} opacity={opacity} onScaleStart={onScaleStart} /> : null}
     </group>
   );
 
@@ -5843,25 +5941,33 @@ function SelectionRing({ opacity = 1, selected = true }: { opacity?: number; sel
   );
 }
 
-/**
- * Interactive grab ring at the base of a selected furniture instance.
- * Overlays the visual `SelectionRing` and dispatches the rotate gesture.
- * Slightly thicker than the visual ring so it's a comfortable hit target.
- */
 function FurnitureRotateRing({
+  size,
+  scale,
+  opacity,
   onRotateStart,
 }: {
+  size: Vec3;
+  scale: Vec3;
+  opacity: number;
   onRotateStart: (event: ThreeEvent<PointerEvent>) => void;
 }) {
+  const handlePointerDown = (event: ThreeEvent<PointerEvent>) => {
+    event.stopPropagation();
+    onRotateStart(event);
+  };
+  const safeScale = scale.map((value) => Math.max(0.05, Math.abs(value))) as Vec3;
+  const inverseScale: Vec3 = [1 / safeScale[0], 1 / safeScale[1], 1 / safeScale[2]];
+  const worldHeight = size[1] * safeScale[1];
+  const y = Math.max(0.72, worldHeight + 0.32) / safeScale[1];
+  const radius = Math.max(0.78, Math.max(size[0] * safeScale[0], size[2] * safeScale[2]) / 2 + 0.24);
+
   return (
-    <mesh
+    <group
       userData={{ captureHidden: true }}
-      rotation={[-Math.PI / 2, 0, 0]}
-      position={[0, 0.026, 0]}
-      onPointerDown={(event) => {
-        event.stopPropagation();
-        onRotateStart(event);
-      }}
+      position={[0, y, 0]}
+      scale={inverseScale}
+      onPointerDown={handlePointerDown}
       onPointerOver={(event) => {
         event.stopPropagation();
         document.body.style.cursor = "grab";
@@ -5870,41 +5976,64 @@ function FurnitureRotateRing({
         document.body.style.cursor = "";
       }}
     >
-      {/* Wider than the visual ring (0.78–0.97 vs 0.85–0.9) for easier grab. */}
-      <ringGeometry args={[0.78, 0.97, 48]} />
-      <meshBasicMaterial transparent opacity={0} depthWrite={false} />
-    </mesh>
+      <mesh rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[radius, 0.014, 8, 72]} />
+        <meshBasicMaterial color="#FFFFFF" transparent opacity={0.78 * opacity} depthWrite={false} />
+      </mesh>
+      <mesh position={[radius + 0.1, 0, 0]}>
+        <sphereGeometry args={[0.075, 18, 12]} />
+        <meshStandardMaterial
+          color="#FFFFFF"
+          emissive="#FFFFFF"
+          emissiveIntensity={0.18}
+          roughness={0.32}
+          transparent
+          opacity={0.96 * opacity}
+          depthWrite={opacity >= 0.98}
+        />
+      </mesh>
+      <mesh rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[radius, 0.08, 8, 72]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+      </mesh>
+    </group>
   );
 }
 
 function FurnitureScaleHandles({
   size,
+  scale,
   opacity,
   onScaleStart,
 }: {
   size: Vec3;
+  scale: Vec3;
   opacity: number;
-  onScaleStart: (event: ThreeEvent<PointerEvent>) => void;
+  onScaleStart: (axis: ShapeResizeAxis, sign: -1 | 1, event: ThreeEvent<PointerEvent>) => void;
 }) {
-  const halfX = Math.max(0.42, size[0] / 2 + 0.16);
-  const halfZ = Math.max(0.42, size[2] / 2 + 0.16);
-  const y = 0.09;
-  const handles: Vec3[] = [
-    [-halfX, y, -halfZ],
-    [halfX, y, -halfZ],
-    [halfX, y, halfZ],
-    [-halfX, y, halfZ],
+  const safeScale = scale.map((value) => Math.max(0.05, Math.abs(value))) as Vec3;
+  const inverseScale: Vec3 = [1 / safeScale[0], 1 / safeScale[1], 1 / safeScale[2]];
+  const halfX = Math.max(0.36, size[0] / 2 + 0.16);
+  const halfY = Math.max(0.34, size[1] / 2 + 0.16);
+  const halfZ = Math.max(0.36, size[2] / 2 + 0.16);
+  const handles: Array<{ axis: ShapeResizeAxis; sign: -1 | 1; position: Vec3; color: string }> = [
+    { axis: 0, sign: -1, position: [-halfX, halfY * 0.52, 0], color: SCENE_COLORS.axisX },
+    { axis: 0, sign: 1, position: [halfX, halfY * 0.52, 0], color: SCENE_COLORS.axisX },
+    { axis: 1, sign: 1, position: [0, halfY * 2, 0], color: SCENE_COLORS.axisY },
+    { axis: 2, sign: -1, position: [0, halfY * 0.52, -halfZ], color: SCENE_COLORS.axisZ },
+    { axis: 2, sign: 1, position: [0, halfY * 0.52, halfZ], color: SCENE_COLORS.axisZ },
   ];
 
   return (
     <group userData={{ captureHidden: true }}>
-      {handles.map((position, index) => (
+      {handles.map((handle) => (
         <mesh
-          key={`${index}-${position[0]}-${position[2]}`}
-          position={position}
+          key={`${handle.axis}-${handle.sign}`}
+          position={handle.position}
+          scale={inverseScale}
           onPointerDown={(event) => {
             event.stopPropagation();
-            onScaleStart(event);
+            onScaleStart(handle.axis, handle.sign, event);
           }}
           onPointerOver={(event) => {
             event.stopPropagation();
@@ -5916,8 +6045,8 @@ function FurnitureScaleHandles({
         >
           <boxGeometry args={[0.14, 0.14, 0.14]} />
           <meshStandardMaterial
-            color={SCENE_COLORS.axisX}
-            emissive={SCENE_COLORS.axisX}
+            color={handle.color}
+            emissive={handle.color}
             emissiveIntensity={0.24}
             roughness={0.42}
             transparent
