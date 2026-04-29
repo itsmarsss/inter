@@ -57,6 +57,7 @@ type BlueprintViewProps = {
 type OpeningDragSession = {
   kind: "door" | "window";
   id: string;
+  mode: "move" | "resize-start" | "resize-end";
   wall: WallId;
   startOffset: number;
   grabOffset: number;
@@ -403,7 +404,7 @@ export function BlueprintView({
       onInstancesChange(
         instances.map((instance) =>
           instance.id === objectTransform.target.id
-            ? { ...instance, position: next.position, rotation: next.rotation, scale: next.scale }
+            ? { ...instance, position: [next.position[0], 0, next.position[2]], rotation: next.rotation, scale: next.scale }
             : instance,
         ),
       );
@@ -413,7 +414,12 @@ export function BlueprintView({
     onShapesChange(
       shapes.map((shape) =>
         shape.id === objectTransform.target.id
-          ? { ...shape, position: next.position, rotation: next.rotation, scale: next.scale }
+          ? {
+              ...shape,
+              position: [next.position[0], groundedShapeY(shape.kind, next.scale[1]), next.position[2]],
+              rotation: next.rotation,
+              scale: next.scale,
+            }
           : shape,
       ),
     );
@@ -436,12 +442,13 @@ export function BlueprintView({
   function beginOpeningDrag(
     kind: "door" | "window",
     target: Door | WindowOpening,
+    mode: OpeningDragSession["mode"],
     event: ReactPointerEvent<SVGElement>,
   ) {
     event.preventDefault();
     event.stopPropagation();
     onSelect({ type: kind, id: target.id });
-    if (tool !== "select" && tool !== "move") return;
+    if (tool !== "select" && tool !== "move" && tool !== "scale") return;
 
     const point = pointFromPointer(event.clientX, event.clientY);
     if (!point) return;
@@ -454,6 +461,7 @@ export function BlueprintView({
     setOpeningDrag({
       kind,
       id: target.id,
+      mode,
       wall: target.wall,
       startOffset: target.offset,
       grabOffset: pointerAlong - target.offset,
@@ -471,9 +479,28 @@ export function BlueprintView({
     const cz = (room.minZ + room.maxZ) / 2;
     const pointerAlong =
       openingDrag.wall === "north" || openingDrag.wall === "south" ? point.x - cx : point.y - cz;
-    const nextOffset = clampWallOffset(
+
+    if (openingDrag.mode !== "move") {
+      const rawWidth = Math.abs((pointerAlong - openingDrag.startOffset) * 2);
+      const nextWidth = clampOpeningWidth(room, openingDrag.wall, openingDrag.startOffset, rawWidth);
+
+      if (openingDrag.kind === "door" && onDoorsChange) {
+        onDoorsChange(
+          doors.map((door) => (door.id === openingDrag.id ? { ...door, width: nextWidth } : door)),
+        );
+      } else if (openingDrag.kind === "window" && onWindowsChange) {
+        onWindowsChange(
+          windows.map((win) => (win.id === openingDrag.id ? { ...win, width: nextWidth } : win)),
+        );
+      }
+      return;
+    }
+
+    const nextOffset = clampOpeningOffsetOnWallRun(
       room,
       openingDrag.wall,
+      wallSegments?.[openingDrag.wall],
+      openingDrag.startOffset,
       pointerAlong - openingDrag.grabOffset,
       openingDrag.width,
     );
@@ -649,9 +676,16 @@ export function BlueprintView({
                 stroke={isSelected ? "#3BA7FF" : "#9C7A52"}
                 strokeWidth="0.08"
                 strokeLinecap="butt"
-                onPointerDown={(event) => beginOpeningDrag("door", door, event)}
+                onPointerDown={(event) => beginOpeningDrag("door", door, "move", event)}
                 style={{ cursor: "grab" }}
               />
+              {isSelected ? (
+                <OpeningResizeHandles
+                  segment={seg}
+                  onStart={(event) => beginOpeningDrag("door", door, "resize-start", event)}
+                  onEnd={(event) => beginOpeningDrag("door", door, "resize-end", event)}
+                />
+              ) : null}
               <path
                 d={arc}
                 fill="none"
@@ -684,9 +718,16 @@ export function BlueprintView({
                 stroke={isSelected ? "#3BA7FF" : "#7DB7D9"}
                 strokeWidth="0.1"
                 strokeLinecap="butt"
-                onPointerDown={(event) => beginOpeningDrag("window", win, event)}
+                onPointerDown={(event) => beginOpeningDrag("window", win, "move", event)}
                 style={{ cursor: "grab" }}
               />
+              {isSelected ? (
+                <OpeningResizeHandles
+                  segment={seg}
+                  onStart={(event) => beginOpeningDrag("window", win, "resize-start", event)}
+                  onEnd={(event) => beginOpeningDrag("window", win, "resize-end", event)}
+                />
+              ) : null}
               <line
                 x1={seg.x1}
                 y1={seg.y1}
@@ -982,6 +1023,44 @@ function shapeHandleMetrics(id: string, shapes: CustomShape[]): BlueprintObjectM
   const shape = shapes.find((item) => item.id === id);
   if (!shape) return null;
   return objectMetrics(shape.position, shape.rotation[1], shape.scale, 1, 1);
+}
+
+function groundedShapeY(kind: CustomShape["kind"], scaleY: number) {
+  const safeScaleY = Math.max(0.05, Math.abs(scaleY));
+  return kind === "plane" ? safeScaleY * 0.02 : safeScaleY / 2;
+}
+
+function OpeningResizeHandles({
+  segment,
+  onStart,
+  onEnd,
+}: {
+  segment: BlueprintLine;
+  onStart: (event: ReactPointerEvent<SVGElement>) => void;
+  onEnd: (event: ReactPointerEvent<SVGElement>) => void;
+}) {
+  return (
+    <g>
+      {[
+        { key: "start", x: segment.x1, y: segment.y1, onPointerDown: onStart },
+        { key: "end", x: segment.x2, y: segment.y2, onPointerDown: onEnd },
+      ].map((handle) => (
+        <rect
+          key={handle.key}
+          x={handle.x - 0.12}
+          y={handle.y - 0.12}
+          width="0.24"
+          height="0.24"
+          rx="0.045"
+          fill="#FFF9EE"
+          stroke="#3BA7FF"
+          strokeWidth="0.045"
+          onPointerDown={handle.onPointerDown}
+          style={{ cursor: "ew-resize" }}
+        />
+      ))}
+    </g>
+  );
 }
 
 function BlueprintWallOutline({
@@ -1368,6 +1447,47 @@ function connectorLineForRef(
 function wallSurfaceSign(wall: WallId): number {
   if (wall === "north" || wall === "east") return -1;
   return 1;
+}
+
+function clampOpeningWidth(room: RoomBounds, wall: WallId, offset: number, width: number) {
+  const length = wall === "east" || wall === "west" ? room.maxZ - room.minZ : room.maxX - room.minX;
+  const maxWidth = Math.max(0.2, 2 * (length / 2 - Math.abs(offset)));
+  return Math.min(maxWidth, Math.max(0.25, width));
+}
+
+function clampOpeningOffsetOnWallRun(
+  room: RoomBounds,
+  wall: WallId,
+  segments: WallSegment[] | undefined,
+  currentOffset: number,
+  nextOffset: number,
+  width: number,
+) {
+  if (!segments?.length) return clampWallOffset(room, wall, nextOffset, width);
+
+  const length = wall === "east" || wall === "west" ? room.maxZ - room.minZ : room.maxX - room.minX;
+  const currentFraction = Math.min(1, Math.max(0, currentOffset / length + 0.5));
+  const index = segments.findIndex((segment) => currentFraction >= segment.start && currentFraction <= segment.end);
+  if (index === -1) return clampWallOffset(room, wall, nextOffset, width);
+
+  const base = segments[index];
+  let start = base.start;
+  let end = base.end;
+
+  for (let scan = index - 1; scan >= 0; scan -= 1) {
+    if (Math.abs(segments[scan].displacement - base.displacement) > 0.001) break;
+    start = segments[scan].start;
+  }
+
+  for (let scan = index + 1; scan < segments.length; scan += 1) {
+    if (Math.abs(segments[scan].displacement - base.displacement) > 0.001) break;
+    end = segments[scan].end;
+  }
+
+  const min = (start - 0.5) * length + width / 2;
+  const max = (end - 0.5) * length - width / 2;
+  if (max < min) return (min + max) / 2;
+  return Math.min(max, Math.max(min, nextOffset));
 }
 
 function clampBlueprintDisplacement(value: number, room: RoomBounds, wall: WallId): number {

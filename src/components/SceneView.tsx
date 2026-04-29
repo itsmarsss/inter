@@ -185,11 +185,16 @@ type OpeningKind = "door" | "window";
 type OpeningDragSession = {
   kind: OpeningKind;
   id: string;
+  mode: "move" | "scale";
   pointerId: number;
   wall: WallId;
   connector?: WallConnectorRef;
   startOffset: number;
   startBaseY: number;
+  startWidth: number;
+  startHeight: number;
+  startPointerAlong: number;
+  startPointerY: number;
   grabOffsetAlong: number;
   grabOffsetVertical: number;
   latestClientX: number;
@@ -1052,7 +1057,7 @@ function SceneContent({
       if (session.target.type === "furniture") {
         onInstancesChangeRef.current(
           instancesRef.current.map((instance) =>
-            instance.id === session.target.id ? { ...instance, position: nextPosition } : instance,
+            instance.id === session.target.id ? { ...instance, position: [nextPosition[0], 0, nextPosition[2]] } : instance,
           ),
         );
         return;
@@ -1069,7 +1074,9 @@ function SceneContent({
 
       onShapesChangeRef.current(
         shapesRef.current.map((shape) =>
-          shape.id === session.target.id ? { ...shape, position: nextPosition } : shape,
+          shape.id === session.target.id
+            ? { ...shape, position: [nextPosition[0], groundedShapeY(shape.kind, shape.scale[1]), nextPosition[2]] }
+            : shape,
         ),
       );
     }
@@ -1164,7 +1171,11 @@ function SceneContent({
       const nextScale: Vec3 = [...session.startScale];
       nextScale[session.axis] = Math.max(0.05, Math.abs(nextAxisScale));
       onShapesChangeRef.current(
-        shapesRef.current.map((item) => (item.id === session.shapeId ? { ...item, scale: nextScale } : item)),
+        shapesRef.current.map((item) =>
+          item.id === session.shapeId
+            ? { ...item, position: [item.position[0], groundedShapeY(item.kind, nextScale[1]), item.position[2]], scale: nextScale }
+            : item,
+        ),
       );
     }
 
@@ -1428,11 +1439,30 @@ function SceneContent({
       if (session.kind === "door") {
         const door = doorsRef.current.find((item) => item.id === session.id);
         if (!door) return;
+        if (session.mode === "scale") {
+          const widthFromDelta = session.startWidth + Math.abs(projection.offsetAlong - session.startPointerAlong) * 2;
+          const nextWidth = connectorProjection
+            ? Math.min(connectorProjection.descriptor.length * 0.95, Math.max(0.25, widthFromDelta))
+            : clampOpeningWidthOnWallRun(room, wallSegmentsRef.current, session.wall, session.startOffset, widthFromDelta);
+          const nextHeight = Math.min(room.height - 0.05, Math.max(0.6, session.startHeight + projection.y - session.startPointerY));
+          onDoorsChangeRef.current(
+            doorsRef.current.map((item) =>
+              item.id === session.id ? { ...item, width: nextWidth, height: nextHeight } : item,
+            ),
+          );
+          return;
+        }
         const rawOffset = projection.offsetAlong - session.grabOffsetAlong;
-        const segment = findSegmentAtFraction(wallSegmentsRef.current[session.wall], offsetToFraction(room, session.wall, door.offset));
         const nextOffset = connectorProjection
           ? clampConnectorOffset(connectorProjection.descriptor, rawOffset, door.width)
-          : clampSegmentOffset(room, session.wall, segment, rawOffset, door.width);
+          : clampOpeningOffsetOnWallRun(
+              room,
+              wallSegmentsRef.current,
+              session.wall,
+              door.offset,
+              rawOffset,
+              door.width,
+            );
         if (nextOffset === door.offset) return;
         onDoorsChangeRef.current(
           doorsRef.current.map((item) =>
@@ -1444,11 +1474,30 @@ function SceneContent({
 
       const window = windowsRef.current.find((item) => item.id === session.id);
       if (!window) return;
+      if (session.mode === "scale") {
+        const widthFromDelta = session.startWidth + Math.abs(projection.offsetAlong - session.startPointerAlong) * 2;
+        const nextWidth = connectorProjection
+          ? Math.min(connectorProjection.descriptor.length * 0.95, Math.max(0.25, widthFromDelta))
+          : clampOpeningWidthOnWallRun(room, wallSegmentsRef.current, session.wall, session.startOffset, widthFromDelta);
+        const nextHeight = Math.min(room.height - window.baseY - 0.05, Math.max(0.3, session.startHeight + projection.y - session.startPointerY));
+        onWindowsChangeRef.current(
+          windowsRef.current.map((item) =>
+            item.id === session.id ? { ...item, width: nextWidth, height: nextHeight } : item,
+          ),
+        );
+        return;
+      }
       const rawOffset = projection.offsetAlong - session.grabOffsetAlong;
-      const segment = findSegmentAtFraction(wallSegmentsRef.current[session.wall], offsetToFraction(room, session.wall, window.offset));
       const nextOffset = connectorProjection
         ? clampConnectorOffset(connectorProjection.descriptor, rawOffset, window.width)
-        : clampSegmentOffset(room, session.wall, segment, rawOffset, window.width);
+        : clampOpeningOffsetOnWallRun(
+            room,
+            wallSegmentsRef.current,
+            session.wall,
+            window.offset,
+            rawOffset,
+            window.width,
+          );
       const nextBaseY = clampWindowVerticalOffset(
         room,
         projection.y - session.grabOffsetVertical,
@@ -1803,7 +1852,7 @@ function SceneContent({
     event: ThreeEvent<PointerEvent>,
   ) {
     if (viewMode !== "blockout") return;
-    if (tool !== "select" && tool !== "move") return;
+    if (tool !== "select" && tool !== "move" && tool !== "scale") return;
     if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
 
     const point = projectPointerToFloor(event.clientX, event.clientY);
@@ -1951,6 +2000,7 @@ function SceneContent({
     kind: OpeningKind,
     target: Door | WindowOpening,
     event: ThreeEvent<PointerEvent>,
+    forcedMode?: OpeningDragSession["mode"],
   ) {
     if (viewMode !== "blockout") return;
     if (event.button !== 0 || event.altKey || !event.nativeEvent.isPrimary) return;
@@ -1958,7 +2008,7 @@ function SceneContent({
     event.stopPropagation();
     onSelect({ type: kind, id: target.id });
 
-    if (tool !== "select" && tool !== "move") return;
+    if (!forcedMode && tool !== "select" && tool !== "move" && tool !== "scale") return;
 
     const connectorProjection = target.connector
       ? projectPointerToConnectorPlane(target.connector, event.clientX, event.clientY)
@@ -1973,11 +2023,16 @@ function SceneContent({
     openingDragRef.current = {
       kind,
       id: target.id,
+      mode: forcedMode ?? (tool === "scale" ? "scale" : "move"),
       pointerId: event.pointerId,
       wall: target.wall,
       connector: target.connector,
       startOffset: target.offset,
       startBaseY: baseY,
+      startWidth: target.width,
+      startHeight: target.height,
+      startPointerAlong: projection.offsetAlong,
+      startPointerY: projection.y,
       grabOffsetAlong: projection.offsetAlong - target.offset,
       grabOffsetVertical: grabVertical,
       latestClientX: event.clientX,
@@ -2292,6 +2347,7 @@ function SceneContent({
             hovered={viewMode === "blockout" && hovered?.type === "door" && hovered.id === door.id}
             opacity={blockoutOpacity}
             onPointerDown={(event) => handleOpeningPointerDown("door", door, event)}
+            onResizePointerDown={(event) => handleOpeningPointerDown("door", door, event, "scale")}
             onPointerOver={() => {}}
             onPointerOut={() => {}}
           />
@@ -2306,6 +2362,7 @@ function SceneContent({
             hovered={viewMode === "blockout" && hovered?.type === "window" && hovered.id === window.id}
             opacity={blockoutOpacity}
             onPointerDown={(event) => handleOpeningPointerDown("window", window, event)}
+            onResizePointerDown={(event) => handleOpeningPointerDown("window", window, event, "scale")}
             onPointerOver={() => {}}
             onPointerOut={() => {}}
           />
@@ -4268,6 +4325,81 @@ function clampSegmentOffset(room: RoomBounds, wall: WallId, segment: WallSegment
   return Math.min(max, Math.max(min, offset));
 }
 
+function clampOpeningOffsetOnWallRun(
+  room: RoomBounds,
+  segmentation: WallSegmentation,
+  wall: WallId,
+  currentOffset: number,
+  nextOffset: number,
+  width: number,
+) {
+  const bounds = openingWallRunBounds(room, segmentation, wall, currentOffset);
+  if (!bounds) return clampWallOffset(room, wall, nextOffset, width);
+  const min = bounds.minOffset + width / 2;
+  const max = bounds.maxOffset - width / 2;
+  if (max < min) return (min + max) / 2;
+  return Math.min(max, Math.max(min, nextOffset));
+}
+
+function clampOpeningWidthOnWallRun(
+  room: RoomBounds,
+  segmentation: WallSegmentation,
+  wall: WallId,
+  currentOffset: number,
+  width: number,
+) {
+  const bounds = openingWallRunBounds(room, segmentation, wall, currentOffset);
+  if (!bounds) return clampOpeningWidth(room, wall, currentOffset, width);
+  const maxWidth = Math.max(0.25, 2 * Math.min(currentOffset - bounds.minOffset, bounds.maxOffset - currentOffset));
+  return Math.min(maxWidth, Math.max(0.25, width));
+}
+
+function openingWallRunBounds(
+  room: RoomBounds,
+  segmentation: WallSegmentation,
+  wall: WallId,
+  currentOffset: number,
+) {
+  const segments = segmentation[wall];
+  if (!segments.length) return null;
+  const length = wallAxisLength(room, wall);
+  const center = wall === "north" || wall === "south"
+    ? (room.minX + room.maxX) / 2
+    : (room.minZ + room.maxZ) / 2;
+  const currentFraction = offsetToFraction(room, wall, currentOffset);
+  const index = segments.findIndex((segment) => currentFraction >= segment.start && currentFraction <= segment.end);
+  if (index === -1) return null;
+
+  const base = segments[index];
+  let startIndex = index;
+  let endIndex = index;
+
+  for (let scan = index - 1; scan >= 0; scan -= 1) {
+    if (Math.abs(segments[scan].displacement - base.displacement) > 0.001) break;
+    startIndex = scan;
+  }
+
+  for (let scan = index + 1; scan < segments.length; scan += 1) {
+    if (Math.abs(segments[scan].displacement - base.displacement) > 0.001) break;
+    endIndex = scan;
+  }
+
+  const startEndpoints = segmentWorldEndpoints(room, segmentation, wall, segments[startIndex]);
+  const endEndpoints = segmentWorldEndpoints(room, segmentation, wall, segments[endIndex]);
+  const minAlong = Math.max(center - length / 2, startEndpoints.start);
+  const maxAlong = Math.min(center + length / 2, endEndpoints.end);
+  return {
+    minOffset: minAlong - center,
+    maxOffset: maxAlong - center,
+  };
+}
+
+function clampOpeningWidth(room: RoomBounds, wall: WallId, offset: number, width: number) {
+  const length = wallAxisLength(room, wall);
+  const maxWidth = Math.max(0.25, 2 * (length / 2 - Math.abs(offset)));
+  return Math.min(maxWidth, Math.max(0.25, width));
+}
+
 function connectorOpeningPosition(descriptor: WallConnectorDescriptor, offset: number, y: number): Vec3 {
   const shifted = descriptor.midCoord + descriptor.directionSign * offset;
   return descriptor.axis === "z"
@@ -4360,11 +4492,12 @@ type DoorNodeProps = {
   hovered: boolean;
   opacity: number;
   onPointerDown: (event: ThreeEvent<PointerEvent>) => void;
+  onResizePointerDown: (event: ThreeEvent<PointerEvent>) => void;
   onPointerOver: () => void;
   onPointerOut: () => void;
 };
 
-function DoorNode({ door, room, wallSegments, selected, hovered, opacity, onPointerDown, onPointerOver, onPointerOut }: DoorNodeProps) {
+function DoorNode({ door, room, wallSegments, selected, hovered, opacity, onPointerDown, onResizePointerDown, onPointerOver, onPointerOut }: DoorNodeProps) {
   const connector = door.connector
     ? connectorDescriptor(room, wallSegments, door.connector)
     : null;
@@ -4450,6 +4583,15 @@ function DoorNode({ door, room, wallSegments, selected, hovered, opacity, onPoin
           depthWrite={frameOpaque}
         />
       </mesh>
+      {selected ? (
+        <OpeningResizeHandles3D
+          width={door.width}
+          height={door.height}
+          depth={frameDepth}
+          opacity={opacity}
+          onPointerDown={onResizePointerDown}
+        />
+      ) : null}
     </group>
   );
 }
@@ -4462,11 +4604,12 @@ type WindowNodeProps = {
   hovered: boolean;
   opacity: number;
   onPointerDown: (event: ThreeEvent<PointerEvent>) => void;
+  onResizePointerDown: (event: ThreeEvent<PointerEvent>) => void;
   onPointerOver: () => void;
   onPointerOut: () => void;
 };
 
-function WindowNode({ window, room, wallSegments, selected, hovered, opacity, onPointerDown, onPointerOver, onPointerOut }: WindowNodeProps) {
+function WindowNode({ window, room, wallSegments, selected, hovered, opacity, onPointerDown, onResizePointerDown, onPointerOver, onPointerOut }: WindowNodeProps) {
   const connector = window.connector
     ? connectorDescriptor(room, wallSegments, window.connector)
     : null;
@@ -4564,6 +4707,62 @@ function WindowNode({ window, room, wallSegments, selected, hovered, opacity, on
           depthWrite={mullionOpaque}
         />
       </mesh>
+      {selected ? (
+        <OpeningResizeHandles3D
+          width={window.width}
+          height={window.height}
+          depth={frameDepth}
+          opacity={opacity}
+          onPointerDown={onResizePointerDown}
+        />
+      ) : null}
+    </group>
+  );
+}
+
+function OpeningResizeHandles3D({
+  width,
+  height,
+  depth,
+  opacity,
+  onPointerDown,
+}: {
+  width: number;
+  height: number;
+  depth: number;
+  opacity: number;
+  onPointerDown: (event: ThreeEvent<PointerEvent>) => void;
+}) {
+  const z = depth / 2 + 0.08;
+  const handles: Vec3[] = [
+    [-width / 2, 0, z],
+    [width / 2, 0, z],
+    [0, height / 2, z],
+  ];
+
+  return (
+    <group userData={{ captureHidden: true }}>
+      {handles.map((position, index) => (
+        <mesh
+          key={`${position[0]}-${position[1]}-${index}`}
+          position={position}
+          onPointerDown={(event) => {
+            event.stopPropagation();
+            onPointerDown(event);
+          }}
+        >
+          <boxGeometry args={[0.12, 0.12, 0.12]} />
+          <meshStandardMaterial
+            color={index === 2 ? SCENE_COLORS.axisY : SCENE_COLORS.axisX}
+            emissive={index === 2 ? SCENE_COLORS.axisY : SCENE_COLORS.axisX}
+            emissiveIntensity={0.25}
+            roughness={0.42}
+            transparent
+            opacity={0.95 * opacity}
+            depthWrite={opacity >= 0.98}
+          />
+        </mesh>
+      ))}
     </group>
   );
 }
@@ -4812,7 +5011,7 @@ function FurnitureNode({
   useFrame(() => {
     if (!groupRef.current || !selected) return;
     const object = groupRef.current;
-    const nextPosition = clampToFloor([object.position.x, object.position.y, object.position.z], room, wallSegments);
+    const nextPosition = clampToFloor([object.position.x, 0, object.position.z], room, wallSegments);
     if (
       nextPosition[0] !== object.position.x ||
       nextPosition[1] !== object.position.y ||
@@ -4825,9 +5024,10 @@ function FurnitureNode({
   function pushTransform() {
     const object = groupRef.current;
     if (!object) return;
+    const nextPosition = clampToFloor([object.position.x, 0, object.position.z], room, wallSegments);
     onChange({
       ...instance,
-      position: [object.position.x, object.position.y, object.position.z],
+      position: [nextPosition[0], 0, nextPosition[2]],
       rotation: [object.rotation.x, object.rotation.y, object.rotation.z],
       scale: [object.scale.x, object.scale.y, object.scale.z],
     });
@@ -4919,7 +5119,8 @@ function ShapeNode({
   useFrame(() => {
     if (!groupRef.current || !selected) return;
     const object = groupRef.current;
-    const nextPosition = clampToFloor([object.position.x, object.position.y, object.position.z], room, wallSegments);
+    const nextY = groundedShapeY(shape.kind, object.scale.y);
+    const nextPosition = clampToFloor([object.position.x, nextY, object.position.z], room, wallSegments);
     if (
       nextPosition[0] !== object.position.x ||
       nextPosition[1] !== object.position.y ||
@@ -5157,6 +5358,11 @@ function ShapePrimitive({ shape, selected, hovered, opacity }: { shape: CustomSh
       {selected || hovered ? <SelectionRing opacity={opacity} selected={selected} /> : null}
     </group>
   );
+}
+
+function groundedShapeY(kind: CustomShape["kind"], scaleY: number) {
+  const safeScaleY = Math.max(0.05, Math.abs(scaleY));
+  return kind === "plane" ? safeScaleY * 0.02 : safeScaleY / 2;
 }
 
 function ShapeGeometry({ kind, color, opacity }: { kind: ShapeKind; color: string; opacity: number }) {
