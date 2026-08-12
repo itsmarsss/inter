@@ -2,6 +2,12 @@
 
 INTER is an AI-assisted 3D interior design studio for moving quickly from an idea for a room to an explorable spatial concept. It gives designers and everyday users a compact workspace for planning, decorating, and reimagining interiors without jumping between moodboards, modeling tools, and floor-plan software.
 
+
+https://github.com/user-attachments/assets/f1bb7ad1-5e73-450e-b46b-6b76547c79cc
+
+
+
+
 ## What It Does
 
 INTER lets users define and edit a room, add architectural details, generate furniture from text, and view the result as both a 3D blockout and a synchronized 2D blueprint.
